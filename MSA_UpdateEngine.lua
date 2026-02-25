@@ -1,7 +1,32 @@
 -- ########################################################
--- MSA_UpdateEngine.lua  (v8 – per-button cache, inlined tick)
+-- MSA_UpdateEngine.lua  (v10 – spike elimination pass)
 --
--- v8: Per-button metadata cached during full redraw:
+-- v10 over v9:
+--   • GetSettingsCached: auto-caches settings under original key type
+--     Eliminates 9× tostring() string allocations per redraw.
+--   • Reusable sharedFlags table: zero table allocation per redraw.
+--   • Inline remaining from cached CD start/dur in redraw + tick:
+--     Eliminates 2× duplicate C_Spell.GetSpellCooldown per icon.
+--   • Charge label cleanup loop removed (handled in ProcessAura).
+--   • Cached global function refs (zero type() checks per redraw).
+--   • Module-level cachedDB for TickVisuals (zero MSWA_GetDB per tick).
+--   • Module-level GetHastedDuration_Tick (zero closure alloc per tick).
+--   • TickVisuals uses cached CD start/dur (zero C_Spell API per tick).
+--
+-- v9 over v8:
+--   • Event-cached combat/encounter state: zero C-calls per redraw
+--   • Buff-visual dirty flag: MSWA_UpdateBuffVisual_Fast ONLY on
+--     UNIT_AURA events, not every 10Hz tick (eliminates N×C_UnitAuras)
+--   • CD state caching per button: skip C_Spell.GetSpellCooldown +
+--     MSWA_ApplyCooldownFrame when CD hasn't changed (same start/dur)
+--   • Position caching: skip ClearAllPoints + PositionButton when
+--     button index + settings haven't changed
+--   • AURA tick caching: store expirationTime during full redraw,
+--     compute remaining from cache in TickVisuals (zero C API per tick)
+--   • Eliminated duplicate MSWA_UpdateBuffVisual_Fast calls in
+--     Handle_AutoBuff off-CD branches
+--
+-- v8 preserved:
 --   btn._msaS        = settings reference (no tostring fallback in tick)
 --   btn._msaSID      = numeric spellID (no MSWA_KeyToSpellID in tick)
 --   btn._msaIID      = numeric itemID  (no MSWA_KeyToItemID in tick)
@@ -60,6 +85,43 @@ local wipe            = wipe or table.wipe
 local THROTTLE_INTERVAL = 0.100   -- 10 Hz
 
 -----------------------------------------------------------
+-- v10: Settings resolution cache – ZERO tostring per redraw
+-- First access does tostring fallback and caches the result
+-- under the original key. Subsequent accesses: direct hit.
+-----------------------------------------------------------
+
+local function GetSettingsCached(tbl, key)
+    local s = tbl[key]
+    if s ~= nil then return s end
+    -- Fallback: try string/number key conversion (one-time cost)
+    local t = type(key)
+    if t == "number" then
+        s = tbl[tostring(key)]
+    elseif t == "string" then
+        local n = tonumber(key)
+        if n then s = tbl[n] end
+    end
+    -- Cache under original key → future lookups are O(1) with zero allocation
+    if s then tbl[key] = s end
+    return s
+end
+
+-----------------------------------------------------------
+-- v10: Reusable flags table – zero allocation per redraw
+-----------------------------------------------------------
+
+local sharedFlags = { cooldown = false, autoBuff = false, timerTick = false }
+
+-----------------------------------------------------------
+-- v10: Cached global function references (resolved at parse)
+-- MSA_Anchors.lua loads before MSA_UpdateEngine.lua
+-----------------------------------------------------------
+
+local _HideUnusedGroupAnchors = MSWA_HideUnusedGroupAnchorFrames
+local _ApplyGroupAnchorFrame  = MSWA_ApplyGroupAnchorFrame
+local _GetOrCreateGroupAnchor = MSWA_GetOrCreateGroupAnchorFrame
+
+-----------------------------------------------------------
 -- Haste-scaled Auto Buff duration helper
 -----------------------------------------------------------
 
@@ -90,6 +152,22 @@ local needsTimerTick     = false
 local lastFullUpdate     = 0
 local forceImmediate     = false
 local lastActiveCount    = 0
+
+-- v9: Event-cached combat state (eliminates 2 C-calls per redraw)
+local cachedInCombat    = false
+local cachedInEncounter = false
+
+-- v9: Buff-visual dirty flag (eliminates N × C_UnitAuras per redraw)
+-- Only set true on UNIT_AURA or first show; BuffVisual skipped when false.
+local buffVisualDirty   = true
+
+-- v9: CD dirty flag (eliminates N × C_Spell.GetSpellCooldown per redraw)
+-- Only set true on SPELL_UPDATE_COOLDOWN or BAG_UPDATE_COOLDOWN.
+-- When false AND CD is still running (time check), skip API call entirely.
+local cdDirty           = true
+
+-- v10: Cached db reference – refreshed during full redraw, used by TickVisuals
+local cachedDB          = nil
 
 -----------------------------------------------------------
 -- Forward-declared
@@ -137,19 +215,19 @@ local function PositionButton(btn, s, key, idx, frame, ICON_SIZE, ICON_SPACE, db
 
         if groupCtx then
             groupCtx.used[gid] = true
-            if not groupCtx.applied[gid] and type(MSWA_ApplyGroupAnchorFrame) == "function" then
-                gf = MSWA_ApplyGroupAnchorFrame(gid, group)
+            if not groupCtx.applied[gid] and _ApplyGroupAnchorFrame then
+                gf = _ApplyGroupAnchorFrame(gid, group)
                 groupCtx.frames[gid] = gf
                 groupCtx.applied[gid] = true
             else
                 gf = groupCtx.frames[gid]
-                if not gf and type(MSWA_GetOrCreateGroupAnchorFrame) == "function" then
-                    gf = MSWA_GetOrCreateGroupAnchorFrame(gid)
+                if not gf and _GetOrCreateGroupAnchor then
+                    gf = _GetOrCreateGroupAnchor(gid)
                     groupCtx.frames[gid] = gf
                 end
             end
-        elseif type(MSWA_ApplyGroupAnchorFrame) == "function" then
-            gf = MSWA_ApplyGroupAnchorFrame(gid, group)
+        elseif _ApplyGroupAnchorFrame then
+            gf = _ApplyGroupAnchorFrame(gid, group)
         end
 
         if not gf then gf = frame end
@@ -231,6 +309,13 @@ local function HideButton(btn)
     btn._msaSID       = nil
     btn._msaIID       = nil
     btn._msaIsItem    = nil
+    -- v9: clear position + CD + aura caches
+    btn._msaLastIdx    = nil
+    btn._msaCDStart    = nil
+    btn._msaCDDur      = nil
+    btn._msaAuraExp    = nil
+    btn._msaAuraDur    = nil
+    btn._msaAuraActive = nil
     MSWA_ClearCooldownFrame(btn.cooldown)
     MSWA_StopGlow(btn)
     MSWA_HideReminderLabel(btn)
@@ -371,13 +456,20 @@ local function Handle_AutoBuff(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE,
     end
 
     if inBuffPhase then
-        btn:ClearAllPoints()
-        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+        -- v9: position caching
+        if btn._msaLastIdx ~= index then
+            btn._msaLastIdx = index
+            btn:ClearAllPoints()
+            PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+        end
         MSWA_ApplyCooldownFrame(btn.cooldown, timerStart, buffDur, 1)
         local desat = isItem and IsItemZeroCount(s, itemID) or false
         SetDesatCached(btn, desat)
         SetAlphaCached(btn, ComputeAlpha(s, true, inCombat))
-        MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
+        -- v9: BuffVisual only when stacks changed
+        if buffVisualDirty then
+            MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
+        end
 
         local glowRem = buffDur - (now - timerStart)
         if glowRem < 0 then glowRem = 0 end
@@ -393,31 +485,76 @@ local function Handle_AutoBuff(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE,
         return index + 1
 
     elseif isBuffThenCD then
-        btn:ClearAllPoints()
-        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+        -- v9: position caching
+        if btn._msaLastIdx ~= index then
+            btn._msaLastIdx = index
+            btn:ClearAllPoints()
+            PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+        end
 
+        -- v9: CD state caching + cdDirty skip
         if isItem then
-            local onCD, iStart, iDuration = GetItemCDState(itemID)
-            if onCD then
-                MSWA_ApplyCooldownFrame(btn.cooldown, iStart, iDuration, 1)
-            else
-                MSWA_ClearCooldownFrame(btn.cooldown)
+            if cdDirty then
+                local onCD, iStart, iDuration = GetItemCDState(itemID)
+                if onCD then
+                    if btn._msaCDStart ~= iStart or btn._msaCDDur ~= iDuration then
+                        btn._msaCDStart = iStart; btn._msaCDDur = iDuration
+                        MSWA_ApplyCooldownFrame(btn.cooldown, iStart, iDuration, 1)
+                    end
+                else
+                    if btn._msaCDStart ~= 0 then
+                        btn._msaCDStart = 0; btn._msaCDDur = 0
+                        MSWA_ClearCooldownFrame(btn.cooldown)
+                    end
+                end
             end
         else
-            local cdInfo = hasGetCD and C_Spell.GetSpellCooldown(spellID)
-            if cdInfo then
-                local exp = cdInfo.expirationTime
-                if hasGetCDRemaining then
-                    local rem = C_Spell.GetSpellCooldownRemaining(spellID)
-                    if type(rem) == "number" then exp = now + rem end
+            local isNonSecret = spellID and MSWA_IsNonSecret(spellID)
+            local needCDQuery = true
+            if not cdDirty and isNonSecret then
+                local cachedSt = btn._msaCDStart
+                if cachedSt and cachedSt > 0 then
+                    local cachedDur = btn._msaCDDur or 0
+                    if now < cachedSt + cachedDur then
+                        needCDQuery = false
+                    end
                 end
-                MSWA_ApplyCooldownFrame(btn.cooldown, cdInfo.startTime, cdInfo.duration, cdInfo.modRate, exp, spellID)
-            else
-                MSWA_ClearCooldownFrame(btn.cooldown)
+            end
+            if needCDQuery then
+                local cdInfo = hasGetCD and C_Spell.GetSpellCooldown(spellID)
+                if cdInfo then
+                    if isNonSecret then
+                        -- Non-secret: direct compare + cache (zero pcall)
+                        local st = cdInfo.startTime
+                        local dur = cdInfo.duration
+                        if btn._msaCDStart ~= st or btn._msaCDDur ~= dur then
+                            btn._msaCDStart = st; btn._msaCDDur = dur
+                            local exp = cdInfo.expirationTime
+                            if hasGetCDRemaining then
+                                local rem = C_Spell.GetSpellCooldownRemaining(spellID)
+                                if type(rem) == "number" then exp = now + rem end
+                            end
+                            MSWA_ApplyCooldownFrame(btn.cooldown, st, dur, cdInfo.modRate, exp, spellID)
+                        end
+                    else
+                        -- Secret: pass directly to ApplyCooldownFrame (handles pcall)
+                        btn._msaCDStart = nil; btn._msaCDDur = nil
+                        MSWA_ApplyCooldownFrame(btn.cooldown, cdInfo.startTime, cdInfo.duration,
+                                                 cdInfo.modRate, cdInfo.expirationTime, spellID)
+                    end
+                else
+                    if btn._msaCDStart ~= 0 then
+                        btn._msaCDStart = 0; btn._msaCDDur = 0
+                        MSWA_ClearCooldownFrame(btn.cooldown)
+                    end
+                end
             end
         end
 
-        MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
+        -- v9: conditional BuffVisual
+        if buffVisualDirty then
+            MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
+        end
         local onCD = MSWA_IsCooldownActive(btn)
         if onCD then flags.cooldown = true end
 
@@ -434,8 +571,18 @@ local function Handle_AutoBuff(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE,
                 if isItem then
                     rem = GetItemRemaining(itemID, now)
                 else
-                    local r = MSWA_GetSpellGlowRemaining(spellID, now)
-                    if r > 0 then rem = r end
+                    -- v10: non-secret → cached CD, secret → API fallback
+                    local st = btn._msaCDStart
+                    if st then
+                        local dur = btn._msaCDDur or 0
+                        if st > 0 and dur > 1.5 then
+                            local r = (st + dur) - now
+                            if r > 0 then rem = r end
+                        end
+                    else
+                        local r = MSWA_GetSpellGlowRemaining(spellID, now)
+                        if r > 0 then rem = r end
+                    end
                 end
             end
             local gs = s.glow
@@ -451,15 +598,14 @@ local function Handle_AutoBuff(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE,
             local desat = isItem and IsItemZeroCount(s, itemID) or false
             SetDesatCached(btn, desat)
             SetAlphaCached(btn, ComputeAlpha(s, false, inCombat))
-            MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
             MSWA_StopGlow(btn)
             return index + 1
         else
             MSWA_ClearCooldownFrame(btn.cooldown)
+            btn._msaCDStart = 0; btn._msaCDDur = 0
             local desat = isItem and IsItemZeroCount(s, itemID) or false
             SetDesatCached(btn, desat)
             SetAlphaCached(btn, ComputeAlpha(s, false, inCombat))
-            MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
             MSWA_StopGlow(btn)
             return index + 1
         end
@@ -468,9 +614,12 @@ local function Handle_AutoBuff(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE,
         btn:ClearAllPoints()
         PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
         MSWA_ClearCooldownFrame(btn.cooldown)
+        btn._msaCDStart = 0; btn._msaCDDur = 0
         SetDesatCached(btn, false)
         SetAlphaCached(btn, ComputeAlpha(s, false, inCombat))
-        MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
+        if buffVisualDirty then
+            MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
+        end
         MSWA_StopGlow(btn)
         return index + 1
     else
@@ -479,9 +628,12 @@ local function Handle_AutoBuff(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE,
             btn:ClearAllPoints()
             PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
             MSWA_ClearCooldownFrame(btn.cooldown)
+            btn._msaCDStart = 0; btn._msaCDDur = 0
             SetDesatCached(btn, true)
             SetAlphaCached(btn, ComputeAlpha(s, false, inCombat))
-            MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
+            if buffVisualDirty then
+                MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
+            end
             MSWA_StopGlow(btn)
             return index + 1
         end
@@ -510,8 +662,12 @@ local function Handle_ReminderBuff(btn, s, key, index, frame, ICON_SIZE, ICON_SP
     end
 
     if not inBuffPhase then
-        btn:ClearAllPoints()
-        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+        -- v9: position caching
+        if btn._msaLastIdx ~= index then
+            btn._msaLastIdx = index
+            btn:ClearAllPoints()
+            PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+        end
         MSWA_ClearCooldownFrame(btn.cooldown)
         local desat = isItem and IsItemZeroCount(s, itemID) or false
         SetDesatCached(btn, desat)
@@ -529,8 +685,12 @@ local function Handle_ReminderBuff(btn, s, key, index, frame, ICON_SIZE, ICON_SP
         return index + 1
 
     elseif s.reminderShowTimer then
-        btn:ClearAllPoints()
-        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+        -- v9: position caching
+        if btn._msaLastIdx ~= index then
+            btn._msaLastIdx = index
+            btn:ClearAllPoints()
+            PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+        end
         local timerStart = ab.startTime + buffDelay
         MSWA_ApplyCooldownFrame(btn.cooldown, timerStart, buffDur, 1)
         local desat = isItem and IsItemZeroCount(s, itemID) or false
@@ -582,8 +742,12 @@ local function Handle_Charges(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, 
     local recharging = MSWA_ChargeRechargeTick(key, s, now)
     local rem = ch.remaining
 
-    btn:ClearAllPoints()
-    PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+    -- v9: position caching
+    if btn._msaLastIdx ~= index then
+        btn._msaLastIdx = index
+        btn:ClearAllPoints()
+        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+    end
 
     if not forceShow and recharging and ch.rechargeStart > 0 then
         local dur = tonumber(s.chargeDuration) or 0
@@ -644,8 +808,12 @@ local function Handle_AuraTrack(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE
     local aura = spellID and MSWA_GetPlayerAuraDataBySpellID(spellID)
 
     if aura then
-        btn:ClearAllPoints()
-        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+        -- v9: position caching
+        if btn._msaLastIdx ~= index then
+            btn._msaLastIdx = index
+            btn:ClearAllPoints()
+            PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+        end
 
         -- Apply real cooldown from server aura data (survives /reload)
         if btn.cooldown and aura.duration and aura.expirationTime then
@@ -656,8 +824,16 @@ local function Handle_AuraTrack(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE
             MSWA_ClearCooldownFrame(btn.cooldown)
         end
 
+        -- v9: cache aura timing for TickVisuals (zero API call per tick)
+        btn._msaAuraExp = aura.expirationTime or 0
+        btn._msaAuraDur = aura.duration or 0
+        btn._msaAuraActive = true
+
         -- Real stacks from server (v8: use pre-fetched aura, zero double lookup)
-        MSWA_UpdateBuffVisual_WithAura(btn, s, spellID, aura)
+        -- v9: only when buff data changed
+        if buffVisualDirty then
+            MSWA_UpdateBuffVisual_WithAura(btn, s, spellID, aura)
+        end
 
         SetDesatCached(btn, false)
         SetAlphaCached(btn, ComputeAlpha(s, false, inCombat))
@@ -680,6 +856,10 @@ local function Handle_AuraTrack(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE
         return index + 1
     else
         -- Buff not active on player
+        btn._msaAuraActive = false
+        btn._msaAuraExp = 0
+        btn._msaAuraDur = 0
+
         local showMissing = s and s.auraTrackShowMissing
         if showMissing or previewMode or key == selectedKey then
             btn:ClearAllPoints()
@@ -708,31 +888,76 @@ local function Handle_Normal(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, d
                               groupCtx, now, inCombat, previewMode, selectedKey,
                               isItem, spellID, itemID, flags,
                               hasGetCD, hasGetCDRemaining)
-    btn:ClearAllPoints()
-    PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+    -- v9: position caching – skip ClearAllPoints when index unchanged
+    if btn._msaLastIdx ~= index then
+        btn._msaLastIdx = index
+        btn:ClearAllPoints()
+        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+    end
 
+    -- v9: CD state caching – skip API + ApplyCooldownFrame when unchanged
     if isItem then
-        local onCD, iStart, iDuration = GetItemCDState(itemID)
-        if onCD then
-            MSWA_ApplyCooldownFrame(btn.cooldown, iStart, iDuration, 1)
-        else
-            MSWA_ClearCooldownFrame(btn.cooldown)
-        end
-    else
-        local cdInfo = hasGetCD and C_Spell.GetSpellCooldown(spellID)
-        if cdInfo then
-            local exp = cdInfo.expirationTime
-            if hasGetCDRemaining then
-                local rem = C_Spell.GetSpellCooldownRemaining(spellID)
-                if type(rem) == "number" then exp = now + rem end
+        if cdDirty then
+            local onCD, iStart, iDuration = GetItemCDState(itemID)
+            if onCD then
+                if btn._msaCDStart ~= iStart or btn._msaCDDur ~= iDuration then
+                    btn._msaCDStart = iStart; btn._msaCDDur = iDuration
+                    MSWA_ApplyCooldownFrame(btn.cooldown, iStart, iDuration, 1)
+                end
+            else
+                if btn._msaCDStart ~= 0 then
+                    btn._msaCDStart = 0; btn._msaCDDur = 0
+                    MSWA_ClearCooldownFrame(btn.cooldown)
+                end
             end
-            MSWA_ApplyCooldownFrame(btn.cooldown, cdInfo.startTime, cdInfo.duration, cdInfo.modRate, exp, spellID)
-        else
-            MSWA_ClearCooldownFrame(btn.cooldown)
+        end
+        -- when !cdDirty: item CD frame handles its own animation
+    else
+        -- v10: CD caching only safe for non-secret spells (secret values can't be compared)
+        local isNonSecret = spellID and MSWA_IsNonSecret(spellID)
+        local needCDQuery = true
+        if not cdDirty and isNonSecret then
+            local cachedSt = btn._msaCDStart
+            if cachedSt and cachedSt > 0 then
+                local cachedDur = btn._msaCDDur or 0
+                if now < cachedSt + cachedDur then
+                    needCDQuery = false
+                end
+            end
+        end
+        if needCDQuery then
+            local cdInfo = hasGetCD and C_Spell.GetSpellCooldown(spellID)
+            if cdInfo then
+                if isNonSecret then
+                    local st = cdInfo.startTime
+                    local dur = cdInfo.duration
+                    if btn._msaCDStart ~= st or btn._msaCDDur ~= dur then
+                        btn._msaCDStart = st; btn._msaCDDur = dur
+                        local exp = cdInfo.expirationTime
+                        if hasGetCDRemaining then
+                            local rem = C_Spell.GetSpellCooldownRemaining(spellID)
+                            if type(rem) == "number" then exp = now + rem end
+                        end
+                        MSWA_ApplyCooldownFrame(btn.cooldown, st, dur, cdInfo.modRate, exp, spellID)
+                    end
+                else
+                    btn._msaCDStart = nil; btn._msaCDDur = nil
+                    MSWA_ApplyCooldownFrame(btn.cooldown, cdInfo.startTime, cdInfo.duration,
+                                             cdInfo.modRate, cdInfo.expirationTime, spellID)
+                end
+            else
+                if btn._msaCDStart ~= 0 then
+                    btn._msaCDStart = 0; btn._msaCDDur = 0
+                    MSWA_ClearCooldownFrame(btn.cooldown)
+                end
+            end
         end
     end
 
-    MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
+    -- v9: BuffVisual only on UNIT_AURA (stacks don't change on CD events)
+    if buffVisualDirty then
+        MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
+    end
 
     local onCD = MSWA_IsCooldownActive(btn)
     if onCD then flags.cooldown = true end
@@ -752,8 +977,18 @@ local function Handle_Normal(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, d
             if isItem then
                 rem = GetItemRemaining(itemID, now)
             else
-                local r = MSWA_GetSpellGlowRemaining(spellID, now)
-                if r > 0 then rem = r end
+                -- v10: non-secret → cached CD, secret → API fallback
+                local st = btn._msaCDStart
+                if st then
+                    local dur = btn._msaCDDur or 0
+                    if st > 0 and dur > 1.5 then
+                        local r = (st + dur) - now
+                        if r > 0 then rem = r end
+                    end
+                else
+                    local r = MSWA_GetSpellGlowRemaining(spellID, now)
+                    if r > 0 then rem = r end
+                end
             end
         end
     end
@@ -828,6 +1063,7 @@ end
 
 local function MSWA_UpdateSpells()
     local db            = MSWA_GetDB()
+    cachedDB            = db  -- v10: cache for TickVisuals
     local tracked       = db.trackedSpells
     local trackedItems  = db.trackedItems or {}
     local settingsTable = db.spellSettings or {}
@@ -841,15 +1077,19 @@ local function MSWA_UpdateSpells()
     local icons         = MSWA.icons
     local now           = GetTime()
 
-    -- Group anchors
+    -- Group anchors (v9: only wipe when groups exist)
     local groupCtx = MSWA._groupLayoutCtx
     if not groupCtx then
-        groupCtx = { applied = {}, frames = {}, bounds = {}, used = {} }
+        groupCtx = { applied = {}, frames = {}, bounds = {}, used = {}, hadGroups = false }
         MSWA._groupLayoutCtx = groupCtx
     end
-    wipe(groupCtx.applied)
-    wipe(groupCtx.bounds)
-    wipe(groupCtx.used)
+    local hasGroups = db.groups and next(db.groups) ~= nil
+    if hasGroups or groupCtx.hadGroups then
+        wipe(groupCtx.applied)
+        wipe(groupCtx.bounds)
+        wipe(groupCtx.used)
+        groupCtx.hadGroups = hasGroups
+    end
 
     local optFrame    = MSWA.optionsFrame
     local selectedKey = (optFrame and optFrame:IsShown() and MSWA.selectedSpellID) or nil
@@ -857,11 +1097,12 @@ local function MSWA_UpdateSpells()
     local hasGetCD          = C_Spell and C_Spell.GetSpellCooldown
     local hasGetCDRemaining = C_Spell and C_Spell.GetSpellCooldownRemaining
 
-    local inCombat    = InCombatLockdown and InCombatLockdown() and true or false
-    local inEncounter = IsEncounterInProgress and IsEncounterInProgress() and true or false
+    local inCombat    = cachedInCombat
+    local inEncounter = cachedInEncounter
 
-    -- v7: shared flags table
-    local flags = { cooldown = false, autoBuff = false, timerTick = false }
+    -- v10: reuse module-level flags table (zero allocation per redraw)
+    sharedFlags.cooldown = false; sharedFlags.autoBuff = false; sharedFlags.timerTick = false
+    local flags = sharedFlags
 
     -----------------------------------------------------------
     -- 1) Spells
@@ -881,7 +1122,7 @@ local function MSWA_UpdateSpells()
 
                 if spellID then
                     local key = trackedKey
-                    local s   = settingsTable[key] or settingsTable[tostring(key)]
+                    local s   = GetSettingsCached(settingsTable, key)
                     if MSWA_ShouldLoadAura(s, inCombat, inEncounter) or previewMode or key == selectedKey then
                         local newIdx = ProcessAura(icons[index], s, key, index, frame, ICON_SIZE, ICON_SPACE, db,
                                                     groupCtx, now, inCombat, previewMode, selectedKey,
@@ -892,7 +1133,7 @@ local function MSWA_UpdateSpells()
 
                 elseif itemFromSpells then
                     local key = trackedKey
-                    local s   = settingsTable[key] or settingsTable[tostring(key)]
+                    local s   = GetSettingsCached(settingsTable, key)
                     if MSWA_ShouldLoadAura(s, inCombat, inEncounter) or previewMode or key == selectedKey then
                         local newIdx = ProcessAura(icons[index], s, key, index, frame, ICON_SIZE, ICON_SPACE, db,
                                                     groupCtx, now, inCombat, previewMode, selectedKey,
@@ -903,7 +1144,7 @@ local function MSWA_UpdateSpells()
 
                 elseif (previewMode or trackedKey == selectedKey) and MSWA_IsDraftKey(trackedKey) then
                     local btn = icons[index]
-                    local s   = settingsTable[trackedKey] or settingsTable[tostring(trackedKey)]
+                    local s   = GetSettingsCached(settingsTable, trackedKey)
                     SetIconTexture(btn, trackedKey)
                     ShowCached(btn)
                     btn.spellID = trackedKey
@@ -928,7 +1169,7 @@ local function MSWA_UpdateSpells()
         if index > MAX_ICONS then break end
         if enabled then
             local key = GetItemKey(itemID)
-            local s   = settingsTable[key] or settingsTable[tostring(key)]
+            local s   = GetSettingsCached(settingsTable, key)
             if MSWA_ShouldLoadAura(s, inCombat, inEncounter) or previewMode or key == selectedKey then
                 local newIdx = ProcessAura(icons[index], s, key, index, frame, ICON_SIZE, ICON_SPACE, db,
                                             groupCtx, now, inCombat, previewMode, selectedKey,
@@ -939,18 +1180,8 @@ local function MSWA_UpdateSpells()
         end
     end
 
-    -----------------------------------------------------------
-    -- 2.4) Charge label cleanup
-    -----------------------------------------------------------
-    for ci = 1, index - 1 do
-        local btn = icons[ci]
-        if btn and btn.spellID then
-            local cs = settingsTable[btn.spellID] or settingsTable[tostring(btn.spellID)]
-            if not (cs and cs.auraMode == "CHARGES") and btn._msaChargeLabel then
-                btn._msaChargeLabel:Hide()
-            end
-        end
-    end
+    -- v10: Charge label cleanup removed – handled in ProcessAura (line ~946)
+    -- ProcessAura already hides btn._msaChargeLabel when mode ~= "CHARGES"
 
     -----------------------------------------------------------
     -- 2.5) Finalize group anchor footprints
@@ -969,8 +1200,8 @@ local function MSWA_UpdateSpells()
             end
         end
     end
-    if type(MSWA_HideUnusedGroupAnchorFrames) == "function" then
-        MSWA_HideUnusedGroupAnchorFrames(groupCtx.used)
+    if _HideUnusedGroupAnchors then
+        _HideUnusedGroupAnchors(groupCtx.used)
     end
 
     -----------------------------------------------------------
@@ -1000,6 +1231,10 @@ local function MSWA_UpdateSpells()
     -----------------------------------------------------------
     autoBuffActive = flags.autoBuff
     needsTimerTick = flags.timerTick
+
+    -- v9: clear dirty flags after all icons processed
+    buffVisualDirty = false
+    cdDirty = false
 end
 
 MSWA.UpdateSpells    = MSWA_UpdateSpells
@@ -1022,25 +1257,29 @@ _G.MSWA_UpdateSpells = MSWA_UpdateSpells
 -- Cost: ~2-3 calls per affected icon vs ~8+ in v7.
 -----------------------------------------------------------
 
+-- v10: Module-level haste cache for TickVisuals (eliminates closure per tick)
+local _tickHasteCache
+
+local function GetHastedDuration_Tick(s)
+    local dur = tonumber(s.autoBuffDuration) or 10
+    if dur < 0.1 then dur = 0.1 end
+    if s.hasteScaling and UnitSpellHaste then
+        if not _tickHasteCache then _tickHasteCache = tonumber(UnitSpellHaste("player")) or 0 end
+        if _tickHasteCache > 0 then dur = dur / (1 + _tickHasteCache / 100) end
+    end
+    return dur
+end
+
 local function MSWA_TickVisuals()
-    local db            = MSWA_GetDB()
+    local db            = cachedDB or MSWA_GetDB()
     local icons         = MSWA.icons
     local activeCount   = MSWA.activeIconCount or 0
     local now           = GetTime()
     local autoBuff      = MSWA._autoBuff
     local charges       = MSWA._charges
 
-    -- v8: cache haste ONCE per frame, not per icon
-    local hasteCache
-    local function GetHastedDuration(s)
-        local dur = tonumber(s.autoBuffDuration) or 10
-        if dur < 0.1 then dur = 0.1 end
-        if s.hasteScaling and UnitSpellHaste then
-            if not hasteCache then hasteCache = tonumber(UnitSpellHaste("player")) or 0 end
-            if hasteCache > 0 then dur = dur / (1 + hasteCache / 100) end
-        end
-        return dur
-    end
+    -- v10: reset haste cache once per frame
+    _tickHasteCache = nil
 
     local anyNeedTick = false
 
@@ -1065,7 +1304,7 @@ local function MSWA_TickVisuals()
                 local key = btn.spellID
                 local ab = autoBuff[key]
                 if ab and ab.active then
-                    local buffDur = GetHastedDuration(s)
+                    local buffDur = GetHastedDuration_Tick(s)
                     local buffDelay = tonumber(s.autoBuffDelay) or 0
                     local timerStart = ab.startTime + buffDelay
                     rem = buffDur - (now - timerStart)
@@ -1077,10 +1316,20 @@ local function MSWA_TickVisuals()
                         local iid = btn._msaIID
                         if iid then rem = GetItemRemaining(iid, now) end
                     else
-                        local sid = btn._msaSID
-                        if sid then
-                            rem, isOnCD = MSWA_GetSpellGlowRemaining(sid, now)
-                            if not isOnCD then rem = 0 end
+                        -- v10: non-secret → cached CD, secret → API fallback
+                        local st = btn._msaCDStart
+                        if st then
+                            local dur = btn._msaCDDur or 0
+                            if st > 0 and dur > 1.5 then
+                                rem = (st + dur) - now
+                                if rem > 0 then isOnCD = true else rem = 0 end
+                            end
+                        else
+                            local sid = btn._msaSID
+                            if sid then
+                                rem, isOnCD = MSWA_GetSpellGlowRemaining(sid, now)
+                                if not isOnCD then rem = 0 end
+                            end
                         end
                     end
                     -- v8: inline MSWA_IsCooldownActive
@@ -1103,11 +1352,12 @@ local function MSWA_TickVisuals()
                 end
 
             elseif mode == "AURA" then
-                local sid = btn._msaSID
-                if sid then
-                    local aura = MSWA_GetPlayerAuraDataBySpellID(sid)
-                    if aura then
-                        rem = MSWA_GetAuraRemaining(aura, sid, now)
+                -- v9: use cached aura timing from full redraw (zero API call)
+                if btn._msaAuraActive then
+                    local exp = btn._msaAuraExp or 0
+                    if exp > 0 then
+                        rem = exp - now
+                        if rem < 0 then rem = 0 end
                         isOnCD = rem > 0
                         if isOnCD then anyNeedTick = true end
                     end
@@ -1119,10 +1369,20 @@ local function MSWA_TickVisuals()
                     local iid = btn._msaIID
                     if iid then rem = GetItemRemaining(iid, now) end
                 else
-                    local sid = btn._msaSID
-                    if sid then
-                        rem, isOnCD = MSWA_GetSpellGlowRemaining(sid, now)
-                        if not isOnCD then rem = 0 end
+                    -- v10: non-secret → cached CD, secret → API fallback
+                    local st = btn._msaCDStart
+                    if st then
+                        local dur = btn._msaCDDur or 0
+                        if st > 0 and dur > 1.5 then
+                            rem = (st + dur) - now
+                            if rem > 0 then isOnCD = true else rem = 0 end
+                        end
+                    else
+                        local sid = btn._msaSID
+                        if sid then
+                            rem, isOnCD = MSWA_GetSpellGlowRemaining(sid, now)
+                            if not isOnCD then rem = 0 end
+                        end
                     end
                 end
                 -- v8: inline MSWA_IsCooldownActive
@@ -1155,7 +1415,7 @@ local function AutoBuffTick(settingsTable, now)
     local anyExpired = false
     for key, ab in pairs(MSWA._autoBuff) do
         if ab and ab.active then
-            local s2 = settingsTable[key] or settingsTable[tostring(key)]
+            local s2 = GetSettingsCached(settingsTable, key)
             local dur = GetEffectiveBuffDuration(s2)
             local delay = tonumber(s2 and s2.autoBuffDelay) or 0
             if (now - ab.startTime) < (delay + dur) then
@@ -1186,7 +1446,7 @@ engineFrame:SetScript("OnUpdate", function(self)
     if dirty or autoBuffActive then
         if forceImmediate or (now - lastFullUpdate) >= THROTTLE_INTERVAL then
             if autoBuffActive then
-                AutoBuffTick(MSWA_GetDB().spellSettings or {}, now)
+                AutoBuffTick((cachedDB or MSWA_GetDB()).spellSettings or {}, now)
             end
             dirty = false
             forceImmediate = false
@@ -1225,6 +1485,8 @@ end
 function MSWA_ForceUpdateSpells()
     dirty = true
     forceImmediate = true
+    cdDirty = true
+    buffVisualDirty = true
     engineFrame:Show()
 end
 
@@ -1241,10 +1503,19 @@ function MSWA_InvalidateIconCache()
                 btn._msaSID       = nil
                 btn._msaIID       = nil
                 btn._msaIsItem    = nil
+                -- v9: clear position + CD + aura caches
+                btn._msaLastIdx    = nil
+                btn._msaCDStart    = nil
+                btn._msaCDDur      = nil
+                btn._msaAuraExp    = nil
+                btn._msaAuraDur    = nil
+                btn._msaAuraActive = nil
             end
         end
     end
     lastActiveCount = -1
+    buffVisualDirty = true
+    cdDirty = true
     MSWA_ForceUpdateSpells()
 end
 
@@ -1296,15 +1567,33 @@ mainFrame:SetScript("OnEvent", function(self, event, arg1)
         MSWA_RefreshPlayerIdentity()
         WipeIconCache()
         lastActiveCount = -1
+        buffVisualDirty = true
+        cdDirty = true
+        -- v9: initialize combat cache
+        cachedInCombat = InCombatLockdown and InCombatLockdown() and true or false
+        cachedInEncounter = IsEncounterInProgress and IsEncounterInProgress() and true or false
         MSWA_ForceUpdateSpells()
         MSWA_ApplyUIFont()
     elseif event == "UNIT_AURA" then
         if arg1 ~= "player" then return end
+        buffVisualDirty = true
         MSWA_RequestUpdateSpells()
     elseif event == "UNIT_INVENTORY_CHANGED" then
         if arg1 ~= "player" then return end
+        buffVisualDirty = true
+        MSWA_RequestUpdateSpells()
+    elseif event == "SPELL_UPDATE_COOLDOWN" then
+        -- v9: CD events need cdDirty but NOT buffVisualDirty
+        cdDirty = true
+        MSWA_RequestUpdateSpells()
+    elseif event == "BAG_UPDATE" or event == "BAG_UPDATE_COOLDOWN" then
+        buffVisualDirty = true
+        cdDirty = true
         MSWA_RequestUpdateSpells()
     else
+        -- PLAYER_TALENT_UPDATE, PLAYER_EQUIPMENT_CHANGED etc.
+        cdDirty = true
+        buffVisualDirty = true
         MSWA_RequestUpdateSpells()
     end
 end)
@@ -1319,7 +1608,17 @@ do
     loadFilterFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
     loadFilterFrame:RegisterEvent("ENCOUNTER_START")
     loadFilterFrame:RegisterEvent("ENCOUNTER_END")
-    loadFilterFrame:SetScript("OnEvent", function()
+    loadFilterFrame:SetScript("OnEvent", function(self, event)
+        -- v9: event-cached combat/encounter state
+        if event == "PLAYER_REGEN_DISABLED" then
+            cachedInCombat = true
+        elseif event == "PLAYER_REGEN_ENABLED" then
+            cachedInCombat = false
+        elseif event == "ENCOUNTER_START" then
+            cachedInEncounter = true
+        elseif event == "ENCOUNTER_END" then
+            cachedInEncounter = false
+        end
         MSWA_InvalidateIconCache()
         if MSWA_RefreshOptionsList and MSWA.optionsFrame and MSWA.optionsFrame:IsShown() then
             MSWA_RefreshOptionsList()
@@ -1357,7 +1656,7 @@ do
                     sid = MSWA_KeyToSpellID(trackedKey)
                 end
                 if sid == castSpellID then
-                    local s = db.spellSettings[trackedKey] or db.spellSettings[tostring(trackedKey)]
+                    local s = GetSettingsCached(db.spellSettings, trackedKey)
                     if s and (s.auraMode == "AUTOBUFF" or s.auraMode == "BUFF_THEN_CD" or s.auraMode == "REMINDER_BUFF") then
                         MSWA._autoBuff[trackedKey] = { active = true, startTime = GetTime() }
                         triggered = true
@@ -1387,7 +1686,7 @@ do
     local lastItemCDStart = {}
 
     local function CheckItemCD(key, itemID, db, now)
-        local s = db.spellSettings[key] or db.spellSettings[tostring(key)]
+        local s = GetSettingsCached(db.spellSettings, key)
         if not s then return nil end
 
         local isBuffMode = (s.auraMode == "AUTOBUFF" or s.auraMode == "BUFF_THEN_CD" or s.auraMode == "REMINDER_BUFF")
@@ -1478,7 +1777,7 @@ do
         local cleared = false
         for key, ab in pairs(MSWA._autoBuff) do
             if ab and ab.active then
-                local s = db.spellSettings[key] or db.spellSettings[tostring(key)]
+                local s = GetSettingsCached(db.spellSettings, key)
                 if s and s.auraMode == "REMINDER_BUFF" and not s.reminderPersistDeath then
                     ab.active = false
                     cleared = true
