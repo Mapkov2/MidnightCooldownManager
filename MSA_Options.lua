@@ -458,6 +458,34 @@ MSWA_UpdateDetailPanel = function()
         end
     end
 
+    -- Sync rekey EditBox with current spell/item ID
+    if f.rekeyEdit then
+        local currentID
+        if MSWA_IsItemKey(key) then
+            currentID = MSWA_KeyToItemID(key)
+        elseif MSWA_IsSpellInstanceKey(key) then
+            currentID = MSWA_KeyToSpellID(key)
+        elseif type(key) == "number" then
+            currentID = key
+        end
+        f.rekeyEdit:SetText(currentID and tostring(currentID) or "")
+        -- Hide for drafts
+        local isDraft = MSWA_IsDraftKey(key)
+        f.rekeyLabel:SetShown(not isDraft)
+        f.rekeyEdit:SetShown(not isDraft)
+        f.rekeyBtn:SetShown(not isDraft)
+        f.rekeyHint:SetShown(not isDraft)
+        -- Re-anchor addLabel: below rekey when visible, below detailName when hidden
+        if f.addLabel then
+            f.addLabel:ClearAllPoints()
+            if isDraft then
+                f.addLabel:SetPoint("TOPLEFT", f.detailName, "BOTTOMLEFT", 0, -10)
+            else
+                f.addLabel:SetPoint("TOPLEFT", f.rekeyHint, "BOTTOMLEFT", 0, -10)
+            end
+        end
+    end
+
     if f.detailX then f.detailX:SetText(("%d"):format(x)) end
     if f.detailY then f.detailY:SetText(("%d"):format(y)) end
     if f.detailW then f.detailW:SetText(("%d"):format(w)) end
@@ -504,6 +532,89 @@ MSWA_UpdateDetailPanel = function()
     end
     if f.showDecimalCheck then
         f.showDecimalCheck:SetChecked((s and s.showDecimal) and true or false)
+    end
+
+    -- Sync Display Type dropdown + bar settings
+    if f.displayTypeDrop then
+        local dt = (s and s.displayType == "BAR") and "BAR" or "ICON"
+        f._displayTypeVal = dt
+        UIDropDownMenu_SetSelectedValue(f.displayTypeDrop, dt)
+        UIDropDownMenu_SetText(f.displayTypeDrop, dt == "BAR" and "Progress Bar" or "Icon")
+
+        local isBar = (dt == "BAR")
+        if f._barSettingsFrame then f._barSettingsFrame:SetShown(isBar) end
+
+        -- Reanchor separator + labelX based on bar visibility
+        if f._displayTypeSep then
+            f._displayTypeSep:ClearAllPoints()
+            if isBar then
+                f._displayTypeSep:SetPoint("TOPLEFT", f._barSettingsFrame, "BOTTOMLEFT", 0, -6)
+            else
+                f._displayTypeSep:SetPoint("TOPLEFT", f.displayTypeDrop, "BOTTOMLEFT", 16, -6)
+            end
+        end
+        if f._labelX then
+            f._labelX:ClearAllPoints()
+            f._labelX:SetPoint("TOPLEFT", f._displayTypeSep, "BOTTOMLEFT", 0, -8)
+        end
+
+        if isBar and s then
+            if f.barNameEdit then
+                local cn = (db.customNames and db.customNames[key]) or ""
+                if cn == "" then
+                    -- Show auto-resolved name as placeholder
+                    local numKey = tonumber(key)
+                    local autoName
+                    if numKey then
+                        autoName = MSWA_GetSpellName and MSWA_GetSpellName(numKey)
+                    else
+                        local keyStr = tostring(key)
+                        local sid = keyStr:match("^spell:(%d+)")
+                        if sid then autoName = MSWA_GetSpellName and MSWA_GetSpellName(tonumber(sid)) end
+                        if not autoName then
+                            local iid = keyStr:match("^item:(%d+)")
+                            if iid and C_Item and C_Item.GetItemNameByID then autoName = C_Item.GetItemNameByID(tonumber(iid)) end
+                        end
+                    end
+                    f.barNameEdit:SetText(autoName or "")
+                else
+                    f.barNameEdit:SetText(cn)
+                end
+            end
+            if f.barWidthEdit then f.barWidthEdit:SetText(tostring(s.barWidth or 200)) end
+            if f.barHeightEdit then f.barHeightEdit:SetText(tostring(s.barHeight or 22)) end
+            if f.barFontEdit then f.barFontEdit:SetText(tostring(s.barFontSize or s.textFontSize or db.textFontSize or 12)) end
+            if f.barShowNameCheck then f.barShowNameCheck:SetChecked(s.barShowName ~= false) end
+            if f.barShowTimerCheck then f.barShowTimerCheck:SetChecked(s.barShowTimer ~= false) end
+            if f.barShowSparkCheck then f.barShowSparkCheck:SetChecked(s.barShowSpark ~= false) end
+            if f.barColorSwatch then
+                local bc = s.barColor or { r = 0.9, g = 0.7, b = 0.0 }
+                f.barColorSwatch:SetColorTexture(bc.r or 0.9, bc.g or 0.7, bc.b or 0.0, 1)
+            end
+            -- Show Icon + position
+            local showIcon = (s.barShowIcon ~= false)
+            if f.barShowIconCheck then f.barShowIconCheck:SetChecked(showIcon) end
+            if f.barIconPosLabel then f.barIconPosLabel:SetShown(showIcon) end
+            if f.barIconPosDrop then
+                f.barIconPosDrop:SetShown(showIcon)
+                local pos = s.barIconPos or "LEFT"
+                UIDropDownMenu_SetSelectedValue(f.barIconPosDrop, pos)
+                local posLabels = { LEFT = "Left", RIGHT = "Right", TOP = "Top", BOTTOM = "Bottom" }
+                UIDropDownMenu_SetText(f.barIconPosDrop, posLabels[pos] or "Left")
+            end
+            -- Fill Direction
+            if f.barFillDirDrop then
+                local fd = s.barFillDir or "LR"
+                UIDropDownMenu_SetSelectedValue(f.barFillDirDrop, fd)
+                local fdLabels = {
+                    LR = "Left \226\134\146 Right",
+                    RL = "Right \226\134\146 Left",
+                    BT = "Bottom \226\134\146 Top  (vertical)",
+                    TB = "Top \226\134\146 Bottom  (vertical)",
+                }
+                UIDropDownMenu_SetText(f.barFillDirDrop, fdLabels[fd] or fdLabels["LR"])
+            end
+        end
     end
 
     -- Sync alpha sliders
@@ -646,7 +757,7 @@ MSWA_UpdateDetailPanel = function()
             f.autoBuffCheck:Hide(); f.autoBuffLabel:Hide()
         end
 
-        -- Buff → Cooldown checkbox
+        -- Buff -> Cooldown checkbox
         if f.buffThenCDCheck then
             if isSpellKey or isItemKey then
                 f.buffThenCDCheck:Show(); f.buffThenCDLabel:Show()
@@ -782,8 +893,19 @@ MSWA_UpdateDetailPanel = function()
                 if sid then
                     f.buffAuraSpellIDLabel:SetText("|cff888888Tracking: spell " .. sid .. " on " .. unit .. "|r")
                 else
-                    f.buffAuraSpellIDLabel:SetText("|cffff4444No auraSpellID set – enter spell ID above|r")
+                    f.buffAuraSpellIDLabel:SetText("|cffff4444No auraSpellID set - enter spell ID above|r")
                 end
+            end
+        end
+        -- Reminder threshold controls
+        if f.reminderThreshLabel then
+            f.reminderThreshLabel:SetShown(showBuffAuraSub)
+            f.reminderThreshEdit:SetShown(showBuffAuraSub)
+            f.reminderThreshUnit:SetShown(showBuffAuraSub)
+            f.reminderThreshHint:SetShown(showBuffAuraSub)
+            if showBuffAuraSub and s then
+                local tv = s.reminderThresholdMin
+                f.reminderThreshEdit:SetText(tv and tostring(tv) or "")
             end
         end
 
@@ -828,8 +950,8 @@ MSWA_UpdateDetailPanel = function()
         -- Anchor label: anchor to buffAuraCheck sub-options (visible) or chargesCheck or prev visible
         if f._anchorLabel then
             f._anchorLabel:ClearAllPoints()
-            if showBuffAuraSub and f.buffAuraSpellIDLabel then
-                f._anchorLabel:SetPoint("TOPLEFT", f.buffAuraSpellIDLabel, "BOTTOMLEFT", -22, -10)
+            if showBuffAuraSub and f.reminderThreshHint then
+                f._anchorLabel:SetPoint("TOPLEFT", f.reminderThreshHint, "BOTTOMLEFT", -22, -10)
             elseif f.buffAuraCheck and f.buffAuraCheck:IsShown() then
                 f._anchorLabel:SetPoint("TOPLEFT", f.buffAuraCheck, "BOTTOMLEFT", 0, -10)
             elseif f.chargesCheck and f.chargesCheck:IsShown() then
@@ -1108,7 +1230,7 @@ local function MSWA_CreateOptionsFrame()
     f.rows = {}
 
 
--- Layout list row text (no inline buttons — context menu handles actions)
+-- Layout list row text (no inline buttons - context menu handles actions)
 local function MSWA_LayoutListRowText(row)
     if not row or not row.text or not row.icon then return end
     row.text:ClearAllPoints()
@@ -1117,7 +1239,7 @@ local function MSWA_LayoutListRowText(row)
 end
 
     -- Multi-select state (Shift+Click range selection)
-    MSWA._multiSelect = {}   -- key → true
+    MSWA._multiSelect = {}   -- key -> true
     f._lastClickIdx = nil    -- entry index of last normal click
     f._lastEntries = nil     -- cached entries from last UpdateAuraList
 
@@ -2430,7 +2552,25 @@ end
     f.detailTitle = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.detailTitle:SetPoint("TOPLEFT", 10, -10); f.detailTitle:SetText("Selected aura:")
     f.detailName = gp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); f.detailName:SetPoint("TOPLEFT", f.detailTitle, "BOTTOMLEFT", 0, -4); f.detailName:SetText("")
 
-    f.addLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormal"); f.addLabel:SetPoint("TOPLEFT", f.detailName, "BOTTOMLEFT", 0, -14); f.addLabel:SetText("Add ID:")
+    -- Change Spell/Item ID (rekey)
+    f.rekeyLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.rekeyLabel:SetPoint("TOPLEFT", f.detailName, "BOTTOMLEFT", 0, -10)
+    f.rekeyLabel:SetText("Spell/Item ID:")
+    f.rekeyEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate")
+    f.rekeyEdit:SetSize(80, 20)
+    f.rekeyEdit:SetPoint("LEFT", f.rekeyLabel, "RIGHT", 6, 0)
+    f.rekeyEdit:SetAutoFocus(false)
+    f.rekeyEdit:SetNumeric(true)
+    f.rekeyBtn = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate")
+    f.rekeyBtn:SetSize(60, 20)
+    f.rekeyBtn:SetPoint("LEFT", f.rekeyEdit, "RIGHT", 4, 0)
+    f.rekeyBtn:SetText("Change")
+    f.rekeyHint = gp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    f.rekeyHint:SetPoint("TOPLEFT", f.rekeyLabel, "BOTTOMLEFT", 0, -3)
+    f.rekeyHint:SetWidth(340); f.rekeyHint:SetJustifyH("LEFT")
+    f.rekeyHint:SetText("|cff888888Change spell/item ID. All settings are preserved.|r")
+
+    f.addLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormal"); f.addLabel:SetPoint("TOPLEFT", f.rekeyHint, "BOTTOMLEFT", 0, -10); f.addLabel:SetText("Add ID:")
     f.addEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate"); f.addEdit:SetSize(80, 20); f.addEdit:SetPoint("LEFT", f.addLabel, "RIGHT", 6, 0); f.addEdit:SetAutoFocus(false); f.addEdit:SetNumeric(true)
     f.idTypeLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.idTypeLabel:SetPoint("LEFT", f.addEdit, "RIGHT", 8, 0); f.idTypeLabel:SetText("Type:")
     f.idTypeDrop = CreateFrame("Frame", "MSWA_IDTypeDropDown", gp, "UIDropDownMenuTemplate"); f.idTypeDrop:SetPoint("LEFT", f.idTypeLabel, "RIGHT", -10, -3); UIDropDownMenu_SetWidth(f.idTypeDrop, 140)
@@ -2467,7 +2607,7 @@ end
     f.autoBuffLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.autoBuffLabel:SetPoint("LEFT", f.autoBuffCheck, "RIGHT", 2, 0)
     f.autoBuffLabel:SetText("|cffffcc00Auto Buff mode|r  (show icon only while buff is active)")
 
-    -- Buff → Cooldown checkbox
+    -- Buff -> Cooldown checkbox
     f.buffThenCDCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
     f.buffThenCDCheck:SetPoint("TOPLEFT", f.autoBuffCheck, "BOTTOMLEFT", 0, -2)
     f.buffThenCDLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -2763,6 +2903,40 @@ end
     f.buffAuraSpellIDLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     f.buffAuraSpellIDLabel:SetPoint("TOPLEFT", f.buffAuraAlphaLabel, "BOTTOMLEFT", 0, -4)
 
+    -- Reminder threshold: "Only show when <= X min remaining"
+    f.reminderThreshLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.reminderThreshLabel:SetPoint("TOPLEFT", f.buffAuraSpellIDLabel, "BOTTOMLEFT", 0, -8)
+    f.reminderThreshLabel:SetText("Only show when \226\137\164")
+
+    f.reminderThreshEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate")
+    f.reminderThreshEdit:SetSize(40, 20)
+    f.reminderThreshEdit:SetPoint("LEFT", f.reminderThreshLabel, "RIGHT", 4, 0)
+    f.reminderThreshEdit:SetAutoFocus(false)
+
+    f.reminderThreshUnit = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.reminderThreshUnit:SetPoint("LEFT", f.reminderThreshEdit, "RIGHT", 4, 0)
+    f.reminderThreshUnit:SetText("min remaining")
+
+    f.reminderThreshHint = gp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    f.reminderThreshHint:SetPoint("TOPLEFT", f.reminderThreshLabel, "BOTTOMLEFT", 0, -3)
+    f.reminderThreshHint:SetWidth(340); f.reminderThreshHint:SetJustifyH("LEFT"); f.reminderThreshHint:SetWordWrap(true)
+    f.reminderThreshHint:SetText("|cff888888Leave empty to always show. Set 10 = show when buff has \226\137\164 10 min left.\nIdeal for Poisons, Raid Buffs, Flasks, Food Buffs.|r")
+
+    local function SaveThreshold()
+        local key = MSWA.selectedSpellID; if not key then return end
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+        local val = tonumber(f.reminderThreshEdit:GetText())
+        if val and val > 0 then
+            s2.reminderThresholdMin = val
+        else
+            s2.reminderThresholdMin = nil
+        end
+        MSWA_RequestUpdateSpells()
+    end
+    f.reminderThreshEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveThreshold() end)
+    f.reminderThreshEdit:SetScript("OnEditFocusLost", SaveThreshold)
+    f.reminderThreshEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
     -- Anchor (after buffAuraCheck when visible, otherwise after chargesCheck)
     local labelA = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); labelA:SetPoint("TOPLEFT", f.buffAuraCheck, "BOTTOMLEFT", 0, -10); labelA:SetText("Anchor to frame:")
     f._anchorLabel = labelA
@@ -2773,7 +2947,7 @@ end
     f.detailDefault = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate"); f.detailDefault:SetSize(80, 22); f.detailDefault:SetPoint("LEFT", f.detailApply, "RIGHT", 6, 0); f.detailDefault:SetText("Default")
 
     -- Set scroll child height for General panel (increased for BUFF_AURA controls)
-    gp:SetHeight(850)
+    gp:SetHeight(900)
 
     -- Display tab
     f.displayPanel = CreateFrame("Frame", nil, rightPanel); f.displayPanel:SetPoint("TOPLEFT", 12, -60); f.displayPanel:SetPoint("BOTTOMRIGHT", -12, 12); f.displayPanel:Hide()
@@ -2793,7 +2967,284 @@ end
         if w and w > 30 then dp:SetWidth(w) end
     end)
 
-    local labelX = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); labelX:SetPoint("TOPLEFT", 10, -10); labelX:SetText("Offset X:")
+    -- ======= Display Type (Icon / Bar) =======
+    local dtTitle = dp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    dtTitle:SetPoint("TOPLEFT", 10, -10)
+    dtTitle:SetText("|cffffcc00Display Type|r")
+
+    f.displayTypeDrop = CreateFrame("Frame", "MSWA_DisplayTypeDD", dp, "UIDropDownMenuTemplate")
+    f.displayTypeDrop:SetPoint("TOPLEFT", dtTitle, "BOTTOMLEFT", -16, -2)
+    UIDropDownMenu_SetWidth(f.displayTypeDrop, 130)
+    f._displayTypeVal = "ICON"
+
+    UIDropDownMenu_Initialize(f.displayTypeDrop, function(self, level)
+        if not level then return end
+        local function AddDT(text, val, tip)
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = text; info.value = val
+            info.func = function()
+                f._displayTypeVal = val
+                UIDropDownMenu_SetSelectedValue(f.displayTypeDrop, val)
+                UIDropDownMenu_SetText(f.displayTypeDrop, text)
+                -- Save
+                local key = MSWA.selectedSpellID; if not key then return end
+                local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+                s2.displayType = (val == "BAR") and "BAR" or nil
+                MSWA_InvalidateIconCache()
+                MSWA_UpdateDetailPanel()
+            end
+            info.checked = (f._displayTypeVal == val)
+            if tip then info.tooltipTitle = text; info.tooltipText = tip; info.tooltipOnButton = true end
+            UIDropDownMenu_AddButton(info, level)
+        end
+        AddDT("Icon", "ICON", "Standard icon with cooldown swipe.\nClassic WoW addon style.")
+        AddDT("Progress Bar", "BAR", "Horizontal bar with icon, name, timer.\nLike WeakAuras / Blizzard buff bars.")
+    end)
+    UIDropDownMenu_SetSelectedValue(f.displayTypeDrop, "ICON")
+    UIDropDownMenu_SetText(f.displayTypeDrop, "Icon")
+
+    -- ======= Bar Settings (shown only in BAR mode) =======
+    f._barSettingsFrame = CreateFrame("Frame", nil, dp)
+    f._barSettingsFrame:SetPoint("TOPLEFT", f.displayTypeDrop, "BOTTOMLEFT", 16, -4)
+    f._barSettingsFrame:SetSize(400, 290)
+    f._barSettingsFrame:Hide()
+    local bsf = f._barSettingsFrame
+
+    -- Bar Name (custom display name)
+    f.barNameLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barNameLabel:SetPoint("TOPLEFT", 0, 0)
+    f.barNameLabel:SetText("Name:")
+    f.barNameEdit = CreateFrame("EditBox", nil, bsf, "InputBoxTemplate")
+    f.barNameEdit:SetSize(180, 20); f.barNameEdit:SetPoint("LEFT", f.barNameLabel, "RIGHT", 6, 0)
+    f.barNameEdit:SetAutoFocus(false)
+
+    local function SaveBarName()
+        local key = MSWA.selectedSpellID; if not key then return end
+        local db2 = MSWA_GetDB(); db2.customNames = db2.customNames or {}
+        local txt = f.barNameEdit:GetText() or ""
+        txt = txt:gsub("^%s+", ""):gsub("%s+$", "")
+        if txt == "" then
+            db2.customNames[key] = nil
+        else
+            db2.customNames[key] = txt
+        end
+        MSWA_InvalidateIconCache()
+    end
+    f.barNameEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveBarName() end)
+    f.barNameEdit:SetScript("OnEditFocusLost", SaveBarName)
+    f.barNameEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    -- Bar Width
+    f.barWidthLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barWidthLabel:SetPoint("TOPLEFT", f.barNameLabel, "BOTTOMLEFT", 0, -8)
+    f.barWidthLabel:SetText("Bar Width:")
+    f.barWidthEdit = CreateFrame("EditBox", nil, bsf, "InputBoxTemplate")
+    f.barWidthEdit:SetSize(60, 20); f.barWidthEdit:SetPoint("LEFT", f.barWidthLabel, "RIGHT", 6, 0)
+    f.barWidthEdit:SetAutoFocus(false); f.barWidthEdit:SetNumeric(true)
+
+    -- Bar Height
+    f.barHeightLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barHeightLabel:SetPoint("TOPLEFT", f.barWidthLabel, "BOTTOMLEFT", 0, -8)
+    f.barHeightLabel:SetText("Bar Height:")
+    f.barHeightEdit = CreateFrame("EditBox", nil, bsf, "InputBoxTemplate")
+    f.barHeightEdit:SetSize(60, 20); f.barHeightEdit:SetPoint("LEFT", f.barHeightLabel, "RIGHT", 6, 0)
+    f.barHeightEdit:SetAutoFocus(false); f.barHeightEdit:SetNumeric(true)
+
+    -- Bar Font Size
+    f.barFontLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barFontLabel:SetPoint("LEFT", f.barHeightEdit, "RIGHT", 16, 0)
+    f.barFontLabel:SetText("Font:")
+    f.barFontEdit = CreateFrame("EditBox", nil, bsf, "InputBoxTemplate")
+    f.barFontEdit:SetSize(40, 20); f.barFontEdit:SetPoint("LEFT", f.barFontLabel, "RIGHT", 6, 0)
+    f.barFontEdit:SetAutoFocus(false); f.barFontEdit:SetNumeric(true)
+
+    -- Bar Color
+    f.barColorLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barColorLabel:SetPoint("TOPLEFT", f.barHeightLabel, "BOTTOMLEFT", 0, -8)
+    f.barColorLabel:SetText("Bar Color:")
+    f.barColorBtn = CreateFrame("Button", nil, bsf)
+    f.barColorBtn:SetSize(18, 18); f.barColorBtn:SetPoint("LEFT", f.barColorLabel, "RIGHT", 8, 0)
+    f.barColorSwatch = f.barColorBtn:CreateTexture(nil, "ARTWORK"); f.barColorSwatch:SetAllPoints()
+    f.barColorSwatch:SetColorTexture(0.9, 0.7, 0.0, 1)
+    f.barColorBorder = f.barColorBtn:CreateTexture(nil, "BORDER")
+    f.barColorBorder:SetPoint("TOPLEFT", -1, 1); f.barColorBorder:SetPoint("BOTTOMRIGHT", 1, -1)
+    f.barColorBorder:SetColorTexture(0, 0, 0, 1)
+
+    f.barColorBtn:SetScript("OnClick", function()
+        local key = MSWA.selectedSpellID; if not key then return end
+        local db2 = MSWA_GetDB()
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(db2, key))
+        local bc = s2.barColor or { r = 0.9, g = 0.7, b = 0.0 }
+        local function OnColorChanged()
+            local r, g, b = ColorPickerFrame:GetColorRGB()
+            s2.barColor = { r = r, g = g, b = b }
+            f.barColorSwatch:SetColorTexture(r, g, b, 1)
+            MSWA_InvalidateIconCache()
+        end
+        local function OnCancel(prev)
+            s2.barColor = { r = prev.r, g = prev.g, b = prev.b }
+            f.barColorSwatch:SetColorTexture(prev.r, prev.g, prev.b, 1)
+            MSWA_InvalidateIconCache()
+        end
+        ColorPickerFrame:SetColorRGB(bc.r, bc.g, bc.b)
+        ColorPickerFrame.hasOpacity = false
+        ColorPickerFrame.func = OnColorChanged
+        ColorPickerFrame.cancelFunc = OnCancel
+        ColorPickerFrame.previousValues = { r = bc.r, g = bc.g, b = bc.b }
+        ColorPickerFrame:Show()
+    end)
+
+    -- Show Name checkbox
+    f.barShowNameCheck = CreateFrame("CheckButton", nil, bsf, "ChatConfigCheckButtonTemplate")
+    f.barShowNameCheck:SetPoint("TOPLEFT", f.barColorLabel, "BOTTOMLEFT", -4, -6)
+    f.barShowNameLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barShowNameLabel:SetPoint("LEFT", f.barShowNameCheck, "RIGHT", 2, 0)
+    f.barShowNameLabel:SetText("Show spell name")
+
+    -- Show Timer checkbox
+    f.barShowTimerCheck = CreateFrame("CheckButton", nil, bsf, "ChatConfigCheckButtonTemplate")
+    f.barShowTimerCheck:SetPoint("TOPLEFT", f.barShowNameCheck, "BOTTOMLEFT", 0, -2)
+    f.barShowTimerLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barShowTimerLabel:SetPoint("LEFT", f.barShowTimerCheck, "RIGHT", 2, 0)
+    f.barShowTimerLabel:SetText("Show timer text")
+
+    -- Show Spark checkbox
+    f.barShowSparkCheck = CreateFrame("CheckButton", nil, bsf, "ChatConfigCheckButtonTemplate")
+    f.barShowSparkCheck:SetPoint("TOPLEFT", f.barShowTimerCheck, "BOTTOMLEFT", 0, -2)
+    f.barShowSparkLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barShowSparkLabel:SetPoint("LEFT", f.barShowSparkCheck, "RIGHT", 2, 0)
+    f.barShowSparkLabel:SetText("Show spark (bright edge)")
+
+    -- Show Icon checkbox
+    f.barShowIconCheck = CreateFrame("CheckButton", nil, bsf, "ChatConfigCheckButtonTemplate")
+    f.barShowIconCheck:SetPoint("TOPLEFT", f.barShowSparkCheck, "BOTTOMLEFT", 0, -6)
+    f.barShowIconLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barShowIconLabel:SetPoint("LEFT", f.barShowIconCheck, "RIGHT", 2, 0)
+    f.barShowIconLabel:SetText("Show spell icon")
+
+    -- Icon Position dropdown
+    f.barIconPosLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barIconPosLabel:SetPoint("LEFT", f.barShowIconLabel, "RIGHT", 16, 0)
+    f.barIconPosLabel:SetText("Position:")
+    f.barIconPosDrop = CreateFrame("Frame", "MSWA_BarIconPosDD", bsf, "UIDropDownMenuTemplate")
+    f.barIconPosDrop:SetPoint("LEFT", f.barIconPosLabel, "RIGHT", -12, -3)
+    UIDropDownMenu_SetWidth(f.barIconPosDrop, 80)
+
+    local ICON_POS_LABELS = { LEFT = "Left", RIGHT = "Right", TOP = "Top", BOTTOM = "Bottom" }
+    local ICON_POS_ORDER  = { "LEFT", "RIGHT", "TOP", "BOTTOM" }
+
+    UIDropDownMenu_Initialize(f.barIconPosDrop, function(self, level)
+        if not level then return end
+        for _, val in ipairs(ICON_POS_ORDER) do
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = ICON_POS_LABELS[val]; info.value = val
+            info.func = function()
+                UIDropDownMenu_SetSelectedValue(f.barIconPosDrop, val)
+                UIDropDownMenu_SetText(f.barIconPosDrop, ICON_POS_LABELS[val])
+                local key = MSWA.selectedSpellID; if not key then return end
+                local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+                s2.barIconPos = val
+                MSWA_InvalidateIconCache()
+            end
+            info.checked = (UIDropDownMenu_GetSelectedValue(f.barIconPosDrop) == val)
+            UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+    UIDropDownMenu_SetSelectedValue(f.barIconPosDrop, "LEFT")
+    UIDropDownMenu_SetText(f.barIconPosDrop, "Left")
+
+    -- Fill Direction dropdown
+    f.barFillDirLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barFillDirLabel:SetPoint("TOPLEFT", f.barShowIconCheck, "BOTTOMLEFT", 4, -8)
+    f.barFillDirLabel:SetText("Fill direction:")
+    f.barFillDirDrop = CreateFrame("Frame", "MSWA_BarFillDirDD", bsf, "UIDropDownMenuTemplate")
+    f.barFillDirDrop:SetPoint("LEFT", f.barFillDirLabel, "RIGHT", -12, -3)
+    UIDropDownMenu_SetWidth(f.barFillDirDrop, 140)
+
+    local FILL_LABELS = {
+        LR = "Left \226\134\146 Right",
+        RL = "Right \226\134\146 Left",
+        BT = "Bottom \226\134\146 Top  (vertical)",
+        TB = "Top \226\134\146 Bottom  (vertical)",
+    }
+    local FILL_ORDER = { "LR", "RL", "BT", "TB" }
+    local FILL_TIPS = {
+        LR = "Standard horizontal bar.\nFills from left to right.",
+        RL = "Reversed horizontal bar.\nFills from right to left.",
+        BT = "Vertical bar, fills upward.\nWidth/Height swap automatically.",
+        TB = "Vertical bar, fills downward.\nWidth/Height swap automatically.",
+    }
+
+    UIDropDownMenu_Initialize(f.barFillDirDrop, function(self, level)
+        if not level then return end
+        for _, val in ipairs(FILL_ORDER) do
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = FILL_LABELS[val]; info.value = val
+            info.func = function()
+                UIDropDownMenu_SetSelectedValue(f.barFillDirDrop, val)
+                UIDropDownMenu_SetText(f.barFillDirDrop, FILL_LABELS[val])
+                local key = MSWA.selectedSpellID; if not key then return end
+                local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+                s2.barFillDir = val
+                MSWA_InvalidateIconCache()
+            end
+            info.checked = (UIDropDownMenu_GetSelectedValue(f.barFillDirDrop) == val)
+            if FILL_TIPS[val] then info.tooltipTitle = FILL_LABELS[val]; info.tooltipText = FILL_TIPS[val]; info.tooltipOnButton = true end
+            UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+    UIDropDownMenu_SetSelectedValue(f.barFillDirDrop, "LR")
+    UIDropDownMenu_SetText(f.barFillDirDrop, FILL_LABELS["LR"])
+
+    -- Bar settings save handlers
+    local function SaveBarSize()
+        local key = MSWA.selectedSpellID; if not key then return end
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+        s2.barWidth = tonumber(f.barWidthEdit:GetText()) or 200
+        s2.barHeight = tonumber(f.barHeightEdit:GetText()) or 22
+        s2.barFontSize = tonumber(f.barFontEdit:GetText()) or 11
+        MSWA_InvalidateIconCache()
+    end
+    f.barWidthEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveBarSize() end)
+    f.barWidthEdit:SetScript("OnEditFocusLost", SaveBarSize)
+    f.barHeightEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveBarSize() end)
+    f.barHeightEdit:SetScript("OnEditFocusLost", SaveBarSize)
+    f.barFontEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveBarSize() end)
+    f.barFontEdit:SetScript("OnEditFocusLost", SaveBarSize)
+
+    f.barShowNameCheck:SetScript("OnClick", function(self)
+        local key = MSWA.selectedSpellID; if not key then return end
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+        s2.barShowName = self:GetChecked() and true or false; MSWA_InvalidateIconCache()
+    end)
+    f.barShowTimerCheck:SetScript("OnClick", function(self)
+        local key = MSWA.selectedSpellID; if not key then return end
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+        s2.barShowTimer = self:GetChecked() and true or false; MSWA_InvalidateIconCache()
+    end)
+    f.barShowSparkCheck:SetScript("OnClick", function(self)
+        local key = MSWA.selectedSpellID; if not key then return end
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+        s2.barShowSpark = self:GetChecked() and true or false; MSWA_InvalidateIconCache()
+    end)
+    f.barShowIconCheck:SetScript("OnClick", function(self)
+        local key = MSWA.selectedSpellID; if not key then return end
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+        s2.barShowIcon = self:GetChecked() and true or false
+        -- Show/hide icon pos dropdown
+        local show = self:GetChecked()
+        f.barIconPosLabel:SetShown(show)
+        f.barIconPosDrop:SetShown(show)
+        MSWA_InvalidateIconCache()
+    end)
+
+    -- ======= Separator before Icon-specific settings =======
+    local dtSep = dp:CreateTexture(nil, "ARTWORK")
+    dtSep:SetSize(400, 1); dtSep:SetColorTexture(1, 1, 1, 0.08)
+    f._displayTypeSep = dtSep
+
+    local labelX = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); labelX:SetText("Offset X:")
+    f._labelX = labelX
     f.detailX = CreateFrame("EditBox", nil, dp, "InputBoxTemplate"); f.detailX:SetSize(70, 20); f.detailX:SetPoint("LEFT", labelX, "RIGHT", 6, 0); f.detailX:SetAutoFocus(false)
     f.detailXMinus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.detailXMinus:SetSize(20, 20); f.detailXMinus:SetPoint("LEFT", f.detailX, "RIGHT", 2, 0); f.detailXMinus:SetText("-")
     f.detailXPlus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.detailXPlus:SetSize(20, 20); f.detailXPlus:SetPoint("LEFT", f.detailXMinus, "RIGHT", 2, 0); f.detailXPlus:SetText("+")
@@ -2915,7 +3366,8 @@ end
     f.showDecimalCheck:SetScript("OnClick", function(self)
         local key = MSWA.selectedSpellID; if not key then return end
         local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.showDecimal = self:GetChecked() and true or nil
+        s2.showDecimal = self:GetChecked() and true or false
+        MSWA_InvalidateIconCache()
         MSWA_RequestUpdateSpells()
     end)
 
@@ -3471,7 +3923,7 @@ end
     f.tc2ColorSwatch = f.tc2ColorBtn:CreateTexture(nil, "ARTWORK"); f.tc2ColorSwatch:SetAllPoints(true); f.tc2ColorSwatch:SetColorTexture(1, 0, 0, 1)
     local tc2Border = f.tc2ColorBtn:CreateTexture(nil, "BORDER"); tc2Border:SetPoint("TOPLEFT", f.tc2ColorBtn, "TOPLEFT", -1, 1); tc2Border:SetPoint("BOTTOMRIGHT", f.tc2ColorBtn, "BOTTOMRIGHT", 1, -1); tc2Border:SetColorTexture(0, 0, 0, 1)
 
-    -- Condition button (cycles: TIMER_BELOW ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ TIMER_ABOVE)
+    -- Condition button (cycles: TIMER_BELOW -> TIMER_ABOVE)
     f.tc2CondLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     f.tc2CondLabel:SetPoint("LEFT", f.tc2ColorBtn, "RIGHT", 16, 0)
     f.tc2CondLabel:SetText("When:")
@@ -3487,7 +3939,7 @@ end
     f.tc2ValueLabel:SetText("sec")
 
     -- Set scroll child height (covers all content so scrollbar appears when needed)
-    dp:SetHeight(770)
+    dp:SetHeight(1050)
 
     -- Helper: update condition button text
     local function UpdateTC2CondText(cond)
@@ -3697,6 +4149,27 @@ end
 
     -- Button actions
     f.detailApply:SetScript("OnClick", function() local key = MSWA.selectedSpellID; if not key then return end; local db = MSWA_GetDB(); local s = (db.spellSettings or {})[key] or {}; s.x = nil; s.y = nil; s.anchorFrame = nil; db.spellSettings[key] = s; MSWA_RequestUpdateSpells(); MSWA_UpdateDetailPanel() end)
+
+    -- Rekey handler
+    local function DoRekey()
+        local oldKey = MSWA.selectedSpellID
+        if not oldKey then return end
+        local newID = tonumber(f.rekeyEdit:GetText())
+        if not newID or newID <= 0 then return end
+        f.rekeyEdit:ClearFocus()
+        local ok, result = MSWA_RekeyAura(oldKey, newID)
+        if ok then
+            MSWA_InvalidateIconCache()
+            MSWA_RequestUpdateSpells()
+            MSWA_RefreshOptionsList()
+            MSWA_UpdateDetailPanel()
+        else
+            print("|cffff4444MSA:|r Could not change ID: " .. tostring(result))
+        end
+    end
+    f.rekeyBtn:SetScript("OnClick", DoRekey)
+    f.rekeyEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); DoRekey() end)
+    f.rekeyEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     f.detailACD:SetScript("OnClick", function() f.detailA:SetText("CooldownManager"); ApplyAnchor() end)
     f.detailAMSUF:SetScript("OnClick", function() f.detailA:SetText("MSUF_player"); ApplyAnchor() end)
     f.detailDefault:SetScript("OnClick", function() local key = MSWA.selectedSpellID; if not key then return end; local db = MSWA_GetDB(); (db.spellSettings or {})[key] = nil; MSWA_RequestUpdateSpells(); MSWA_UpdateDetailPanel() end)
@@ -3724,22 +4197,22 @@ end
             if tip then info.tooltipTitle = text; info.tooltipText = tip; info.tooltipOnButton = true end
             UIDropDownMenu_AddButton(info, level)
         end
-        AddTitle("|cff888888— Basic —|r")
+        AddTitle("|cff888888- Basic -|r")
         Add("Auto",           "AUTO",           "Automatically detects spell or item by ID.")
         Add("Spell Cooldown", "SPELL",          "Track a spell's cooldown timer.")
         Add("Item Cooldown",  "ITEM",           "Track an item's cooldown\n(trinkets, potions, on-use gear).")
 
-        AddTitle("|cff888888— Buff Aura —|r")
+        AddTitle("|cff888888- Buff Aura -|r")
         Add("|cff55bbffBuff Aura|r",     "BUFF_AURA",      "Track a live buff on the player.\nShows active/absent state.\nIdeal for poisons, enchants, raid buffs.\nSecret-safe for Midnight 12.0.")
         Add("|cff55bbffItem Buff Aura|r", "ITEM_BUFF_AURA", "Buff Aura linked to an item ID.\nFor item-triggered buffs (flasks, food etc.).")
 
-        AddTitle("|cff888888— Timer Modes —|r")
+        AddTitle("|cff888888- Timer Modes -|r")
         Add("Auto Buff",     "AUTOBUFF",        "Countdown timer after spell cast.\nIcon shows while timer runs, hides when done.")
         Add("Item Buff",     "ITEMBUFF",         "Countdown timer after item use.\nIcon shows while timer runs, hides when done.")
         Add("|cff44ffaaBuff \226\134\146 CD|r",  "BUFF_THEN_CD",    "Buff timer first, then shows cooldown.\nFor abilities with a buff phase + cooldown.")
         Add("|cff44ffaaItem Buff \226\134\146 CD|r", "ITEMBUFF_THEN_CD", "Item buff timer first, then shows cooldown.\nFor items with a buff phase + cooldown.")
 
-        AddTitle("|cff888888— Special —|r")
+        AddTitle("|cff888888- Special -|r")
         Add("|cffff6644Reminder|r",      "REMINDER_BUFF",   "Alert when buff is MISSING.\nShows custom reminder text when absent.\nGreat for missing poisons, class buffs.")
         Add("|cffff6644Item Reminder|r", "ITEM_REMINDER",   "Alert when item buff is MISSING.\nFlask/food buff reminders.")
         Add("Spell Charges", "SPELL_CHARGES",   "Track multiple charges (Chi Torpedo, Roll, etc.).\nShows charge count + recharge cooldown.")
@@ -3975,7 +4448,7 @@ end
     f.btnIDInfo:SetScript("OnClick", function(self, button)
         local db = MSWA_GetDB()
         if button == "RightButton" then
-            -- Right-click: cycle modes (Both ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Spell only ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Icon only ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Off)
+            -- Right-click: cycle modes (Both -> Spell only -> Icon only -> Off)
             if db.showSpellID and db.showIconID then
                 db.showSpellID = true; db.showIconID = false
                 MSWA_Print("Tooltip: Spell/Item ID only")

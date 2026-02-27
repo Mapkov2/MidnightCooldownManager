@@ -1,9 +1,9 @@
 -- ########################################################
--- MSA_BuffTemplates.lua  (v2 – templates + live scanner)
+-- MSA_BuffTemplates.lua  (v2 - templates + live scanner)
 --
--- • Static template library (15 categories, 40+ spells)
--- • One-time out-of-combat spellbook + bag scan
--- • 100 % secret-safe, zero pcall
+-- * Static template library (15 categories, 40+ spells)
+-- * One-time out-of-combat spellbook + bag scan
+-- * 100 % secret-safe, zero pcall
 -- ########################################################
 
 local ADDON_NAME, ns = ...

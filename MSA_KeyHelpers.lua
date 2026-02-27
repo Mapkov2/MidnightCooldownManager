@@ -220,6 +220,99 @@ function MSWA_KeyEquals(a, b)
     return tostring(a) == tostring(b)
 end
 
+-----------------------------------------------------------
+-- Rekey: change spell/item ID, preserve all settings
+-----------------------------------------------------------
+
+function MSWA_RekeyAura(oldKey, newSpellOrItemID)
+    if oldKey == nil or not newSpellOrItemID then return false, "Invalid arguments" end
+    local db = MSWA_GetDB()
+    if not db then return false, "No database" end
+
+    local newID = tonumber(newSpellOrItemID)
+    if not newID or newID <= 0 then return false, "Invalid ID" end
+
+    -- Determine old key type and build new key
+    local newKey
+    local isItem = MSWA_IsItemKey(oldKey)
+    local isItemInst = MSWA_IsItemInstanceKey(oldKey)
+    local isSpellInst = MSWA_IsSpellInstanceKey(oldKey)
+
+    if isItemInst then
+        -- "item:OLD:N" -> "item:NEW:N"
+        local inst = strmatch(tostring(oldKey), "^item:%d+:(%d+)$")
+        newKey = ("item:%d:%s"):format(newID, inst)
+    elseif isItem then
+        -- "item:OLD" -> "item:NEW"
+        newKey = ("item:%d"):format(newID)
+    elseif isSpellInst then
+        -- "spell:OLD:N" -> "spell:NEW:N"
+        local inst = strmatch(tostring(oldKey), "^spell:%d+:(%d+)$")
+        newKey = ("spell:%d:%s"):format(newID, inst)
+    else
+        -- Numeric spell ID
+        newKey = newID
+    end
+
+    -- Check collision
+    if MSWA_KeyEquals(oldKey, newKey) then return false, "Same ID" end
+    if db.spellSettings and db.spellSettings[newKey] then
+        return false, "ID " .. newID .. " already exists"
+    end
+
+    -- 1) Move spellSettings
+    db.spellSettings = db.spellSettings or {}
+    local settings = db.spellSettings[oldKey]
+    if settings then
+        db.spellSettings[newKey] = settings
+        db.spellSettings[oldKey] = nil
+    end
+
+    -- 2) Move trackedSpells / trackedItems
+    if isItem or isItemInst then
+        if db.trackedItems and db.trackedItems[oldKey] then
+            db.trackedItems[newKey] = db.trackedItems[oldKey]
+            db.trackedItems[oldKey] = nil
+        end
+    else
+        if db.trackedSpells and db.trackedSpells[oldKey] then
+            db.trackedSpells[newKey] = db.trackedSpells[oldKey]
+            db.trackedSpells[oldKey] = nil
+        end
+    end
+
+    -- 3) Move customNames
+    if db.customNames and db.customNames[oldKey] then
+        db.customNames[newKey] = db.customNames[oldKey]
+        db.customNames[oldKey] = nil
+    end
+
+    -- 4) Move group assignment
+    if db.auraGroups and db.auraGroups[oldKey] then
+        local gid = db.auraGroups[oldKey]
+        db.auraGroups[newKey] = gid
+        db.auraGroups[oldKey] = nil
+
+        -- Update groupMembers array
+        if db.groupMembers and db.groupMembers[gid] then
+            local members = db.groupMembers[gid]
+            for i = 1, #members do
+                if MSWA_KeyEquals(members[i], oldKey) then
+                    members[i] = newKey
+                    break
+                end
+            end
+        end
+    end
+
+    -- 5) Update selection
+    if MSWA.selectedSpellID and MSWA_KeyEquals(MSWA.selectedSpellID, oldKey) then
+        MSWA.selectedSpellID = newKey
+    end
+
+    return true, newKey
+end
+
 -- Globals for cross-file access
 _G.MSWA_GetSpellSettings = MSWA_GetSpellSettings
 _G.MSWA_GetOrCreateSpellSettings = MSWA_GetOrCreateSpellSettings

@@ -1,11 +1,11 @@
 -- ########################################################
--- MSA_PlayerBuffs.lua  (v3 – minimal event relay)
+-- MSA_PlayerBuffs.lua  (v3 - minimal event relay)
 --
 -- Buff tracking is done DIRECTLY in UpdateEngine hot-path
--- via C_UnitAuras.GetAuraDataBySpellID() – like WeakAuras.
+-- via C_UnitAuras.GetAuraDataBySpellID() - like WeakAuras.
 --
 -- This file only provides:
---   1) UNIT_AURA event relay → triggers UpdateEngine redraw
+--   1) UNIT_AURA event relay -> triggers UpdateEngine redraw
 --   2) Legacy compat: ns.PlayerBuffs.UpdateIcon
 --   3) Stub functions so Options code doesn't error
 --
@@ -16,7 +16,7 @@ local ADDON_NAME, ns = ...
 local type = type
 
 -----------------------------------------------------------
--- Event relay: UNIT_AURA on player → trigger redraw
+-- Event relay: UNIT_AURA on player -> trigger redraw
 -----------------------------------------------------------
 
 local relay = CreateFrame("Frame", "MSWA_BuffEventFrame", UIParent)

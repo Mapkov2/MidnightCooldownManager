@@ -4,9 +4,9 @@
 --
 -- Provides the functions that the UpdateEngine hot-path
 -- calls to decide how to display an aura-type icon:
---   • Active buff → normal icon with timer
---   • Absent buff (showWhenAbsent) → desaturated / dimmed
---   • Absent buff (!showWhenAbsent) → hidden
+--   * Active buff -> normal icon with timer
+--   * Absent buff (showWhenAbsent) -> desaturated / dimmed
+--   * Absent buff (!showWhenAbsent) -> hidden
 --
 -- Secret-safe: no value comparisons, pcall on all API.
 -- Zero idle CPU: only called when UpdateEngine is active.

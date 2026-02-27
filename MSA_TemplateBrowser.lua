@@ -1,5 +1,5 @@
 -- ########################################################
--- MSA_TemplateBrowser.lua  (v2 – professional UI)
+-- MSA_TemplateBrowser.lua  (v2 - professional UI)
 --
 -- 3-panel layout:
 --   Left   = category list (with category icon)
@@ -8,12 +8,12 @@
 --            checkboxes for individual selection
 --
 -- Features:
---   • Fixed 20×20 icons (never stretched)
---   • Per-spell checkbox selection before install
---   • "Your Spellbook" / "Your Bags" dynamic categories
---   • Select All / Deselect All buttons
---   • Install / Reinstall / Uninstall
---   • 100 % secret-safe, zero pcall
+--   * Fixed 20x20 icons (never stretched)
+--   * Per-spell checkbox selection before install
+--   * "Your Spellbook" / "Your Bags" dynamic categories
+--   * Select All / Deselect All buttons
+--   * Install / Reinstall / Uninstall
+--   * 100 % secret-safe, zero pcall
 -- ########################################################
 
 local ADDON_NAME, ns = ...

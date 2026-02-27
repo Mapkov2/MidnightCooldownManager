@@ -1,14 +1,14 @@
 -- ########################################################
--- MSA_SpellAPI.lua  (v4 – max performance rewrite)
+-- MSA_SpellAPI.lua  (v4 - max performance rewrite)
 --
 -- Rules:
---   • pcall ONLY for Midnight secret-value APIs
---   • Font paths cached – zero pcall in hot path
---   • CD API detected once at load time
---   • All hot-path helpers accept (db, s) – no redundant lookups
---   • v4: pcall closures eliminated – named funcs only
---   • v4: MSWA_ApplyStackStyle_Fast takes db param
---   • v4: SwipeDarken dirty-flagged
+--   * pcall ONLY for Midnight secret-value APIs
+--   * Font paths cached - zero pcall in hot path
+--   * CD API detected once at load time
+--   * All hot-path helpers accept (db, s) - no redundant lookups
+--   * v4: pcall closures eliminated - named funcs only
+--   * v4: MSWA_ApplyStackStyle_Fast takes db param
+--   * v4: SwipeDarken dirty-flagged
 -- ########################################################
 
 local type, tostring, tonumber, select = type, tostring, tonumber, select
@@ -113,6 +113,8 @@ end
 function MSWA_ClearCooldownFrame(cd)
     if not cd then return end
     cd.__mswaSet = false
+    cd.__mswaExp = nil
+    cd.__mswaDur = nil
     if cd.Clear then
         cd:Clear()
     elseif CooldownFrame_Clear then
@@ -129,29 +131,40 @@ function MSWA_ClearCooldown(btn)
 end
 
 -- Single pcall per icon. Secret values pass straight through to Blizzard.
+-- Stores timing on cd frame for decimal timer readback.
 function MSWA_ApplyCooldownFrame(cd, startTime, duration, modRate, expirationTime)
     if not cd then return end
     DetectCDAPI()
 
     if cdHasExpTime and expirationTime ~= nil and duration ~= nil then
         local ok = pcall(cd.SetCooldownFromExpirationTime, cd, expirationTime, duration, modRate)
-        if ok then cd.__mswaSet = true; return end
+        if ok then
+            cd.__mswaSet = true
+            cd.__mswaExp = expirationTime
+            cd.__mswaDur = duration
+            return
+        end
     end
 
     if cdHasSetCD and startTime ~= nil and duration ~= nil then
         local ok = pcall(cd.SetCooldown, cd, startTime, duration, modRate)
-        if ok then cd.__mswaSet = true; return end
+        if ok then
+            cd.__mswaSet = true
+            cd.__mswaExp = (startTime and duration) and (startTime + duration) or 0
+            cd.__mswaDur = duration
+            return
+        end
     end
 
     MSWA_ClearCooldownFrame(cd)
 end
 
 -----------------------------------------------------------
--- Aura / Charges – Midnight 12.0 secret-safe
+-- Aura / Charges - Midnight 12.0 secret-safe
 --
 -- Pattern from EQoL:
 --   PRIMARY:  C_UnitAuras.GetUnitAuras("player","HELPFUL")
---             → returns whitelisted table with READABLE fields
+--             -> returns whitelisted table with READABLE fields
 --   FALLBACK: C_UnitAuras.GetPlayerAuraBySpellID(sid)
 --
 -- GetAuraDataBySpellID does NOT exist in Midnight.
@@ -287,7 +300,7 @@ end
 
 local hasGetRemaining = C_Spell and C_Spell.GetSpellCooldownRemaining
 
--- v4: Named function for pcall – eliminates closure allocation
+-- v4: Named function for pcall - eliminates closure allocation
 local function _spellCDRemaining(cdInfo)
     local st  = cdInfo.startTime
     local dur = cdInfo.duration
@@ -295,7 +308,7 @@ local function _spellCDRemaining(cdInfo)
     return (st + dur) - GetTime()
 end
 
--- Spell cooldown values are tainted in Midnight – pcall required for comparisons.
+-- Spell cooldown values are tainted in Midnight - pcall required for comparisons.
 -- Returns (remaining, isOnCooldown).
 function MSWA_GetSpellGlowRemaining(spellID)
     if not spellID then return 0, false end
@@ -309,11 +322,11 @@ function MSWA_GetSpellGlowRemaining(spellID)
     elseif ok then
         return 0, false
     end
-    -- pcall failed (tainted) – remaining unknown
+    -- pcall failed (tainted) - remaining unknown
     return 0, false
 end
 
--- Item cooldowns – also pcall-wrapped for safety
+-- Item cooldowns - also pcall-wrapped for safety
 -- v4: Named function for pcall
 local function _itemGlowRemaining(start, duration)
     if start <= 0 or duration <= 1.5 then return 0 end
@@ -406,14 +419,14 @@ function MSWA_ApplyStackStyle_Fast(btn, s, db)
     target:SetPoint(point, btn, point, baseOff[1] + ox, baseOff[2] + oy)
 end
 
--- Legacy: ApplyStackStyle (calls MSWA_GetDB internally – for Options UI)
+-- Legacy: ApplyStackStyle (calls MSWA_GetDB internally - for Options UI)
 function MSWA_ApplyStackStyle(btn, s)
     MSWA_ApplyStackStyle_Fast(btn, s, MSWA_GetDB())
 end
 
 
 -----------------------------------------------------------
--- Buff visual (stacks/charges) – accepts db + s
+-- Buff visual (stacks/charges) - accepts db + s
 -----------------------------------------------------------
 
 function MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
@@ -455,7 +468,7 @@ function MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
 end
 
 -----------------------------------------------------------
--- Conditional text color – accepts s directly
+-- Conditional text color - accepts s directly
 -----------------------------------------------------------
 
 local function FindCooldownText(cd)
@@ -503,10 +516,14 @@ function MSWA_ApplyConditionalTextColor_Fast(btn, s, db, remaining, isOnCooldown
         end
         if cdText then cdText:SetTextColor(fr, fg, fb, 1) end
     end
+    -- Also color the decimal timer overlay (shown when showDecimal is on)
+    if btn._msaDecimalTimer and btn._msaDecimalTimer:IsShown() then
+        btn._msaDecimalTimer:SetTextColor(fr, fg, fb, 1)
+    end
 end
 
 -----------------------------------------------------------
--- Swipe darken – v4: dirty-flagged to skip redundant calls
+-- Swipe darken - v4: dirty-flagged to skip redundant calls
 -----------------------------------------------------------
 
 function MSWA_ApplySwipeDarken_Fast(btn, s)
@@ -614,7 +631,7 @@ end
 
 -----------------------------------------------------------
 -- Reminder Buff: lazy-created centered label (zero cost
--- when not used – FontString only allocated on first show)
+-- when not used - FontString only allocated on first show)
 -----------------------------------------------------------
 
 local function GetOrCreateReminderLabel(btn)
@@ -668,7 +685,7 @@ end
 -- Charge Display: lazy-created label for spell charges
 -- (Fire Blast 2/3) and item charges (Healthstone count).
 -- Secret-safe: pcall on GetSpellCharges, GetItemCount is
--- plain Lua – no taint risk.
+-- plain Lua - no taint risk.
 -----------------------------------------------------------
 
 local function GetOrCreateChargeLabel(btn)
@@ -687,7 +704,7 @@ end
 -- Zero API reads. Charges are tracked via cast detection
 -- (UNIT_SPELLCAST_SUCCEEDED / BAG_UPDATE_COOLDOWN) and
 -- client-side timers with GetTime(). All values are plain
--- Lua numbers set by the user or our code – no taint.
+-- Lua numbers set by the user or our code - no taint.
 --
 -- Runtime state: MSWA._charges[key] = {
 --   remaining     = N,   -- current charges left
@@ -788,4 +805,22 @@ function MSWA_HideChargeLabel(btn)
         btn._msaChargeLabel:Hide()
     end
     btn._msaChargeStyleKey = nil
+end
+
+-----------------------------------------------------------
+-- Shared timer formatting (used by bars + icon decimal)
+-----------------------------------------------------------
+
+function MSWA_FormatTimer(seconds, showDecimal)
+    if not seconds or seconds <= 0 then return "" end
+    local floor = math.floor
+    if seconds >= 3600 then
+        return string.format("%d:%02d:%02d", floor(seconds/3600), floor(seconds%3600/60), floor(seconds%60))
+    elseif seconds >= 60 then
+        return string.format("%d:%02d", floor(seconds/60), floor(seconds%60))
+    elseif showDecimal and seconds < 10 then
+        return string.format("%.1f", seconds)
+    else
+        return string.format("%d", floor(seconds))
+    end
 end
