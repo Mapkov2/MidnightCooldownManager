@@ -47,6 +47,16 @@ function MSWA_GetDB()
         db.schemaVersion = 5
     end
 
+    if db.schemaVersion < 6 then
+        -- BUFF_AURA fields support in spellSettings:
+        --   auraMode = "BUFF_AURA"
+        --   auraSpellID, auraUnit ("player"), auraFilter (unused, kept for compat)
+        --   showWhenAbsent, desaturateOnAbsent, alphaOnAbsent, showStacks
+        -- Group members table
+        db.groupMembers = db.groupMembers or {}
+        db.schemaVersion = 6
+    end
+
     ----------------------------------------------------------------
     -- Defaults (ensure all fields exist)
     ----------------------------------------------------------------

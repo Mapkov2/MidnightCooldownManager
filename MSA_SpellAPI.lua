@@ -1,21 +1,20 @@
 -- ########################################################
--- MSA_SpellAPI.lua  (v6 – max performance rewrite)
+-- MSA_SpellAPI.lua  (v4 – max performance rewrite)
 --
 -- Rules:
 --   • pcall ONLY for Midnight secret-value APIs
---   • Non-secret whitelist spells: ZERO pcall, direct calls
 --   • Font paths cached – zero pcall in hot path
---   • CD API detected once at PLAYER_LOGIN, not per-call
---   • Item CDs are plain Lua — ZERO pcall ever
+--   • CD API detected once at load time
 --   • All hot-path helpers accept (db, s) – no redundant lookups
---   • v6: per-call DetectCDAPI branch eliminated
---   • v6: MSWA_GetItemGlowRemaining pcall removed (never secret)
---   • v6: type checks skipped for non-secret API returns
+--   • v4: pcall closures eliminated – named funcs only
+--   • v4: MSWA_ApplyStackStyle_Fast takes db param
+--   • v4: SwipeDarken dirty-flagged
 -- ########################################################
 
 local type, tostring, tonumber, select = type, tostring, tonumber, select
 local pcall     = pcall
 local GetTime   = GetTime
+local wipe      = wipe or table.wipe
 local GetItemCooldown = GetItemCooldown
 local GetItemCount    = GetItemCount
 
@@ -95,14 +94,16 @@ function MSWA_InvalidateFontCache()
 end
 
 -----------------------------------------------------------
--- Cooldown frame: API detected ONCE at load time
--- v6: no per-call DetectCDAPI() branch in hot path
+-- Cooldown frame: detect API once, single pcall apply
 -----------------------------------------------------------
 
+local cdAPIDetected = false
 local cdHasExpTime  = false
 local cdHasSetCD    = false
 
-do
+local function DetectCDAPI()
+    if cdAPIDetected then return end
+    cdAPIDetected = true
     local testCD = CreateFrame("Cooldown", nil, UIParent, "CooldownFrameTemplate")
     cdHasExpTime = testCD.SetCooldownFromExpirationTime ~= nil
     cdHasSetCD   = testCD.SetCooldown ~= nil
@@ -127,27 +128,17 @@ function MSWA_ClearCooldown(btn)
     end
 end
 
--- v6: CD API detected at load → zero branch in hot path.
--- Non-secret spells skip pcall entirely.
-function MSWA_ApplyCooldownFrame(cd, startTime, duration, modRate, expirationTime, spellID)
+-- Single pcall per icon. Secret values pass straight through to Blizzard.
+function MSWA_ApplyCooldownFrame(cd, startTime, duration, modRate, expirationTime)
     if not cd then return end
-
-    local safe = spellID and MSWA_IsNonSecret(spellID)
+    DetectCDAPI()
 
     if cdHasExpTime and expirationTime ~= nil and duration ~= nil then
-        if safe then
-            cd:SetCooldownFromExpirationTime(expirationTime, duration, modRate)
-            cd.__mswaSet = true; return
-        end
         local ok = pcall(cd.SetCooldownFromExpirationTime, cd, expirationTime, duration, modRate)
         if ok then cd.__mswaSet = true; return end
     end
 
     if cdHasSetCD and startTime ~= nil and duration ~= nil then
-        if safe then
-            cd:SetCooldown(startTime, duration, modRate)
-            cd.__mswaSet = true; return
-        end
         local ok = pcall(cd.SetCooldown, cd, startTime, duration, modRate)
         if ok then cd.__mswaSet = true; return end
     end
@@ -156,76 +147,129 @@ function MSWA_ApplyCooldownFrame(cd, startTime, duration, modRate, expirationTim
 end
 
 -----------------------------------------------------------
--- Aura / Charges (Midnight needs pcall for secret aura data)
+-- Aura / Charges – Midnight 12.0 secret-safe
+--
+-- Pattern from EQoL:
+--   PRIMARY:  C_UnitAuras.GetUnitAuras("player","HELPFUL")
+--             → returns whitelisted table with READABLE fields
+--   FALLBACK: C_UnitAuras.GetPlayerAuraBySpellID(sid)
+--
+-- GetAuraDataBySpellID does NOT exist in Midnight.
+-- GetAuraDataByAuraInstanceID returns ALL fields secret.
+-- GetUnitAuras returns WHITELISTED readable fields.
 -----------------------------------------------------------
 
-local hasGetAuraData   = C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID
+local hasGetUnitAuras  = C_UnitAuras and C_UnitAuras.GetUnitAuras
+local hasGetPlayerAura = C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID
 local hasGetCDAura     = C_UnitAuras and C_UnitAuras.GetCooldownAuraBySpellID
 local hasGetAuraCount  = C_UnitAuras and C_UnitAuras.GetAuraApplicationDisplayCount
 local hasGetCharges    = C_Spell and C_Spell.GetSpellCharges
 local hasTruncZero     = C_StringUtil and C_StringUtil.TruncateWhenZero
+local _issecretvalue   = _G.issecretvalue
+
+-- Per-frame cache: GetUnitAuras is called once, result shared
+-- across all BUFF_AURA icons in the same frame
+local _buffCache       = {}   -- [spellID] = auraData or false
+local _buffCacheFrame  = -1   -- GetTime() of last cache build
+
+local function RebuildBuffCache()
+    local now = GetTime()
+    if now == _buffCacheFrame then return end
+    _buffCacheFrame = now
+    wipe(_buffCache)
+
+    if not hasGetUnitAuras then return end
+
+    -- EQoL pattern: GetUnitAuras returns all HELPFUL auras
+    -- with whitelisted/readable fields
+    local auras = C_UnitAuras.GetUnitAuras("player", "HELPFUL")
+    if type(auras) ~= "table" then return end
+
+    for i = 1, #auras do
+        local a = auras[i]
+        if a then
+            local sid = a.spellId
+            -- Check if spellId is readable (not secret)
+            if sid and not (_issecretvalue and _issecretvalue(sid)) then
+                -- First match wins (don't overwrite)
+                if not _buffCache[sid] then
+                    _buffCache[sid] = a
+                end
+            end
+        end
+    end
+end
+
+-- Invalidate cache (called from PlayerBuffs on UNIT_AURA)
+function MSWA_InvalidateBuffCache()
+    _buffCacheFrame = -1
+end
 
 function MSWA_GetPlayerAuraDataBySpellID(spellID)
     if not spellID then return nil end
 
-    -- v6: Non-secret → direct call, no pcall needed
-    -- NOTE: API may return a number (aura instance ID) – must verify table
-    if MSWA_IsNonSecret(spellID) then
-        if hasGetAuraData then
-            local data = C_UnitAuras.GetAuraDataBySpellID("player", spellID)
-            if type(data) == "table" then return data end
-        end
-        if hasGetCDAura then
-            local data = C_UnitAuras.GetCooldownAuraBySpellID(spellID)
-            if type(data) == "table" then return data end
-        end
-        return nil
+    -- Primary: GetUnitAuras cache (EQoL Midnight pattern)
+    if hasGetUnitAuras then
+        RebuildBuffCache()
+        local cached = _buffCache[spellID]
+        if cached then return cached end
     end
 
-    -- Secret spells → pcall required
-    if hasGetAuraData then
-        local ok, data = pcall(C_UnitAuras.GetAuraDataBySpellID, "player", spellID)
-        if ok and type(data) == "table" then return data end
+    -- Fallback: GetPlayerAuraBySpellID (works for some buffs)
+    if hasGetPlayerAura then
+        local data = C_UnitAuras.GetPlayerAuraBySpellID(spellID)
+        if data then return data end
     end
+
+    -- Last resort: GetCooldownAuraBySpellID (CD-only auras)
     if hasGetCDAura then
         local ok, data = pcall(C_UnitAuras.GetCooldownAuraBySpellID, spellID)
         if ok and type(data) == "table" then return data end
     end
+
     return nil
 end
 
-function MSWA_GetAuraStackText(auraData, minCount, spellID)
-    if not auraData or not hasGetAuraCount then return nil end
+-- Safe field read: uses issecretvalue to check before reading
+function MSWA_SafeAuraField(auraData, fieldName)
+    if not auraData then return nil end
+    local val = auraData[fieldName]
+    if val == nil then return nil end
+    if _issecretvalue and _issecretvalue(val) then return nil end
+    return val
+end
 
-    -- v5: Non-secret → direct call
-    if spellID and MSWA_IsNonSecret(spellID) then
-        local s = C_UnitAuras.GetAuraApplicationDisplayCount(auraData, minCount or 2)
-        if type(s) == "string" then return s end
-        return nil
+-- Returns true if a field is secret
+function MSWA_IsSecretValue(val)
+    if val == nil then return false end
+    if _issecretvalue and _issecretvalue(val) then return true end
+    return false
+end
+
+-- Stack text: EQoL uses (unitToken, instanceID, min, max) signature
+function MSWA_GetAuraStackText(auraData, minCount)
+    if not auraData or not hasGetAuraCount then return nil end
+    minCount = minCount or 2
+
+    -- EQoL signature: GetAuraApplicationDisplayCount(unit, instanceID, min, max)
+    local instanceID = auraData.auraInstanceID
+    if instanceID then
+        local ok, s = pcall(C_UnitAuras.GetAuraApplicationDisplayCount,
+                            "player", instanceID, minCount, 1000)
+        if ok and s then return tostring(s) end
     end
 
-    local ok, s = pcall(C_UnitAuras.GetAuraApplicationDisplayCount, auraData, minCount or 2)
-    if ok and type(s) == "string" then return s end
+    -- Fallback: read applications directly if not secret
+    local apps = auraData.applications
+    if apps and not (_issecretvalue and _issecretvalue(apps)) then
+        if apps >= minCount then return tostring(apps) end
+    end
+
     return nil
 end
 
 function MSWA_GetSpellChargesText(spellID)
     if not spellID or not hasGetCharges then return nil end
-
-    -- v5: Non-secret → direct calls
-    if MSWA_IsNonSecret(spellID) then
-        local info = C_Spell.GetSpellCharges(spellID)
-        if type(info) ~= "table" then return nil end
-        local cur = info.currentCharges or info.charges
-        if hasTruncZero then
-            local s = C_StringUtil.TruncateWhenZero(cur)
-            if type(s) == "string" then return s end
-        end
-        if cur ~= nil then return tostring(cur) end
-        return nil
-    end
-
-    -- Secret spells → pcall
     local ok, info = pcall(C_Spell.GetSpellCharges, spellID)
     if not ok or type(info) ~= "table" then return nil end
     local cur = info.currentCharges or info.charges
@@ -243,34 +287,6 @@ end
 
 local hasGetRemaining = C_Spell and C_Spell.GetSpellCooldownRemaining
 
------------------------------------------------------------
--- Aura remaining helper (v5: Live Aura mode)
--- Non-secret: direct exp - now.  Secret: pcall.
--- Returns seconds remaining (0 if expired or permanent).
------------------------------------------------------------
-
--- pcall helper for secret aura remaining (no closure)
-local function _auraExpMinusNow(exp, now)
-    return exp - now
-end
-
-function MSWA_GetAuraRemaining(aura, spellID, now)
-    if not aura then return 0 end
-    local exp = aura.expirationTime
-    if not exp or exp == 0 then return 0 end  -- permanent aura or missing
-
-    -- Non-secret: direct subtraction
-    if spellID and MSWA_IsNonSecret(spellID) then
-        local rem = exp - now
-        return rem > 0 and rem or 0
-    end
-
-    -- Secret: pcall the subtraction (exp is tainted)
-    local ok, rem = pcall(_auraExpMinusNow, exp, now)
-    if ok and type(rem) == "number" and rem > 0 then return rem end
-    return 0
-end
-
 -- v4: Named function for pcall – eliminates closure allocation
 local function _spellCDRemaining(cdInfo)
     local st  = cdInfo.startTime
@@ -280,40 +296,36 @@ local function _spellCDRemaining(cdInfo)
 end
 
 -- Spell cooldown values are tainted in Midnight – pcall required for comparisons.
--- v6: Non-secret: zero pcall, direct inline comparison.
--- v6: Accepts optional `now` to avoid redundant GetTime() in hot loops.
 -- Returns (remaining, isOnCooldown).
-function MSWA_GetSpellGlowRemaining(spellID, now)
+function MSWA_GetSpellGlowRemaining(spellID)
     if not spellID then return 0, false end
     if not (C_Spell and C_Spell.GetSpellCooldown) then return 0, false end
     local cdInfo = C_Spell.GetSpellCooldown(spellID)
     if not cdInfo then return 0, false end
-
-    -- v6: Non-secret → direct comparison, zero pcall
-    if MSWA_IsNonSecret(spellID) then
-        local st  = cdInfo.startTime
-        local dur = cdInfo.duration
-        if st <= 0 or dur <= 1.5 then return 0, false end
-        local remaining = (st + dur) - (now or GetTime())
-        if remaining > 0 then return remaining, true end
+    -- v4: pcall on named function, not anonymous closure
+    local ok, remaining = pcall(_spellCDRemaining, cdInfo)
+    if ok and type(remaining) == "number" and remaining > 0 then
+        return remaining, true
+    elseif ok then
         return 0, false
     end
-
-    -- Secret spells → pcall on named function
-    local ok, remaining = pcall(_spellCDRemaining, cdInfo)
-    if ok and remaining > 0 then
-        return remaining, true
-    end
+    -- pcall failed (tainted) – remaining unknown
     return 0, false
 end
 
--- v6: Item cooldowns are plain Lua values — NEVER secret.
--- Zero pcall, direct inline math.
+-- Item cooldowns – also pcall-wrapped for safety
+-- v4: Named function for pcall
+local function _itemGlowRemaining(start, duration)
+    if start <= 0 or duration <= 1.5 then return 0 end
+    return (start + duration) - GetTime()
+end
+
 function MSWA_GetItemGlowRemaining(start, duration)
     if not start or not duration then return 0, false end
-    if start <= 0 or duration <= 1.5 then return 0, false end
-    local remaining = (start + duration) - GetTime()
-    if remaining > 0 then return remaining, true end
+    local ok, remaining = pcall(_itemGlowRemaining, start, duration)
+    if ok and type(remaining) == "number" and remaining > 0 then
+        return remaining, true
+    end
     return 0, false
 end
 
@@ -415,7 +427,7 @@ function MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
     if isItem then
         if itemID and GetItemCount then
             local cnt = GetItemCount(itemID, false, false)
-            if cnt then target:SetText(tostring(cnt)); target:Show()
+            if type(cnt) == "number" then target:SetText(tostring(cnt)); target:Show()
             else target:SetText(""); target:Hide() end
         else target:SetText(""); target:Hide() end
         return
@@ -423,7 +435,7 @@ function MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
     if spellID then
         local auraData = MSWA_GetPlayerAuraDataBySpellID(spellID)
 
-        local stackText = MSWA_GetAuraStackText(auraData, 2, spellID)
+        local stackText = MSWA_GetAuraStackText(auraData, 2)
         if (not stackText) and showMode == "show" and auraData then
             stackText = "1"
         end
@@ -442,53 +454,19 @@ function MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
     target:SetText(""); target:Hide()
 end
 
--- v6: Pre-fetched aura variant — avoids double C_UnitAuras lookup
--- Used by Handle_AuraTrack which already has aura data.
-function MSWA_UpdateBuffVisual_WithAura(btn, s, spellID, aura)
-    local target = btn.stackText or btn.count
-    if not target then return end
-    if btn.stackText and btn.count and btn.stackText ~= btn.count then
-        btn.count:SetText(""); btn.count:Hide()
-    end
-    local showMode = (s and s.stackShowMode) or "auto"
-    if showMode == "hide" then target:SetText(""); target:Hide(); return end
-
-    local stackText = MSWA_GetAuraStackText(aura, 2, spellID)
-    if (not stackText) and showMode == "show" and aura then
-        stackText = "1"
-    end
-
-    if not stackText and spellID then
-        stackText = MSWA_GetSpellChargesText(spellID)
-    end
-
-    if stackText then
-        target:SetText(stackText); target:Show()
-    else
-        target:SetText(""); target:Hide()
-    end
-end
-
 -----------------------------------------------------------
 -- Conditional text color – accepts s directly
--- v6: FindCooldownText uses select() to avoid temp table
 -----------------------------------------------------------
 
 local function FindCooldownText(cd)
     if not cd or not cd.GetRegions then return nil end
-    local n = cd.GetNumRegions and cd:GetNumRegions() or 0
-    for i = 1, n do
-        local region = select(i, cd:GetRegions())
+    for _, region in pairs({cd:GetRegions()}) do
         if region and region.IsObjectType and region:IsObjectType("FontString") then return region end
     end
     if cd.GetChildren then
-        local nc = cd.GetNumChildren and cd:GetNumChildren() or 0
-        for i = 1, nc do
-            local child = select(i, cd:GetChildren())
+        for _, child in pairs({cd:GetChildren()}) do
             if child and child.GetRegions then
-                local nr = child.GetNumRegions and child:GetNumRegions() or 0
-                for j = 1, nr do
-                    local region = select(j, child:GetRegions())
+                for _, region in pairs({child:GetRegions()}) do
                     if region and region.IsObjectType and region:IsObjectType("FontString") then return region end
                 end
             end
@@ -498,22 +476,12 @@ local function FindCooldownText(cd)
 end
 
 function MSWA_ApplyConditionalTextColor_Fast(btn, s, db, remaining, isOnCooldown)
-    if not btn.cooldown then return end
-
-    local cdText = btn._mswaCDText
-    if cdText == nil then
-        cdText = FindCooldownText(btn.cooldown)
-        btn._mswaCDText = cdText or false
-    end
-    if not cdText then return end  -- false sentinel = no FontString found
-
-    local fr, fg, fb = 1, 1, 1
     local baseTC = (s and s.textColor) or (db and db.textColor)
-    if baseTC then fr = baseTC.r or 1; fg = baseTC.g or 1; fb = baseTC.b or 1 end
-
+    local fr, fg, fb = 1, 1, 1
+    if baseTC then fr = tonumber(baseTC.r) or 1; fg = tonumber(baseTC.g) or 1; fb = tonumber(baseTC.b) or 1 end
     if s and s.textColor2Enabled and s.textColor2 then
         local cond = s.textColor2Cond or "TIMER_BELOW"
-        local val  = s.textColor2Value or 5
+        local val  = tonumber(s.textColor2Value) or 5
         remaining  = remaining or 0
         local condActive = false
         if cond == "TIMER_BELOW" then
@@ -522,11 +490,19 @@ function MSWA_ApplyConditionalTextColor_Fast(btn, s, db, remaining, isOnCooldown
             condActive = isOnCooldown and remaining >= val
         end
         if condActive then
-            fr = s.textColor2.r or 1; fg = s.textColor2.g or 0; fb = s.textColor2.b or 0
+            fr = tonumber(s.textColor2.r) or 1; fg = tonumber(s.textColor2.g) or 0; fb = tonumber(s.textColor2.b) or 0
         end
     end
-
-    cdText:SetTextColor(fr, fg, fb, 1)
+    if btn.cooldown then
+        local cdText = btn._mswaCDText
+        if cdText == nil then
+            cdText = FindCooldownText(btn.cooldown)
+            btn._mswaCDText = cdText or false
+        elseif cdText == false then
+            cdText = nil
+        end
+        if cdText then cdText:SetTextColor(fr, fg, fb, 1) end
+    end
 end
 
 -----------------------------------------------------------

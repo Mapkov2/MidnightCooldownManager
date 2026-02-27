@@ -444,8 +444,8 @@ MSWA_UpdateDetailPanel = function()
             abTag = " |cffff6644[Reminder Buff]|r"
         elseif s and s.auraMode == "CHARGES" then
             abTag = " |cff44ddff[Charges]|r"
-        elseif s and s.auraMode == "AURA" then
-            abTag = " |cff00ff88[Live Aura]|r"
+        elseif s and s.auraMode == "BUFF_AURA" then
+            abTag = " |cff55bbff[Buff Aura]|r"
         end
         if MSWA_IsDraftKey(key) then f.detailName:SetText("New Aura - ???")
         elseif MSWA_IsItemKey(key) then
@@ -522,7 +522,7 @@ MSWA_UpdateDetailPanel = function()
 
     -- Sync conditional 2nd text color controls
     -- Timer-based text color works for AUTOBUFF / BUFF_THEN_CD / REMINDER_BUFF (we compute remaining ourselves)
-    local isAutoBuff = s and (s.auraMode == "AUTOBUFF" or s.auraMode == "BUFF_THEN_CD" or s.auraMode == "REMINDER_BUFF" or s.auraMode == "CHARGES" or s.auraMode == "AURA")
+    local isAutoBuff = s and (s.auraMode == "AUTOBUFF" or s.auraMode == "BUFF_THEN_CD" or s.auraMode == "REMINDER_BUFF" or s.auraMode == "CHARGES" or s.auraMode == "BUFF_AURA")
     if f.tc2Check then
         local canUseTC2 = isAutoBuff
         f.tc2Check:SetShown(canUseTC2)
@@ -628,7 +628,6 @@ MSWA_UpdateDetailPanel = function()
         local isBuffThenCD = (s and s.auraMode == "BUFF_THEN_CD") and true or false
         local isReminderBuff = (s and s.auraMode == "REMINDER_BUFF") and true or false
         local isCharges = (s and s.auraMode == "CHARGES") and true or false
-        local isAura = (s and s.auraMode == "AURA") and true or false
         local hasBuffMode = isAutoBuff or isBuffThenCD or isReminderBuff
         local isSpellKey = MSWA_IsSpellKey(key)
         local isItemKey  = MSWA_IsItemKey(key)
@@ -743,31 +742,48 @@ MSWA_UpdateDetailPanel = function()
             end
         end
 
-        -- Live Aura checkbox
-        if f.liveAuraCheck then
-            if isSpellKey then
-                f.liveAuraCheck:Show(); f.liveAuraLabel:Show()
-                f.liveAuraCheck:SetChecked(isAura)
+        -- Buff Aura checkbox
+        local isBuffAura = (s and s.auraMode == "BUFF_AURA") and true or false
+        if f.buffAuraCheck then
+            if isSpellKey or isItemKey then
+                f.buffAuraCheck:Show(); f.buffAuraLabel:Show()
+                f.buffAuraCheck:SetChecked(isBuffAura)
             else
-                f.liveAuraCheck:Hide(); f.liveAuraLabel:Hide()
+                f.buffAuraCheck:Hide(); f.buffAuraLabel:Hide()
             end
         end
-
-        -- Live Aura sub-settings (only visible when AURA mode active)
-        local showAuraSub = isAura
-        if f.liveAuraShowMissingCheck then
-            f.liveAuraShowMissingCheck:SetShown(showAuraSub)
-            f.liveAuraShowMissingLabel:SetShown(showAuraSub)
-            if showAuraSub then
-                f.liveAuraShowMissingCheck:SetChecked((s and s.auraTrackShowMissing) and true or false)
-            end
+        -- BUFF_AURA sub-options visibility
+        local showBuffAuraSub = isBuffAura and (isSpellKey or isItemKey)
+        if f.buffAuraAbsentCheck then
+            f.buffAuraAbsentCheck:SetShown(showBuffAuraSub)
+            f.buffAuraAbsentLabel:SetShown(showBuffAuraSub)
+            if showBuffAuraSub and s then f.buffAuraAbsentCheck:SetChecked(s.showWhenAbsent and true or false) end
         end
-        if f.liveAuraMissingTextLabel then
-            local showMissingText = showAuraSub and (s and s.auraTrackShowMissing) and true or false
-            f.liveAuraMissingTextLabel:SetShown(showMissingText)
-            f.liveAuraMissingTextEdit:SetShown(showMissingText)
-            if showMissingText then
-                f.liveAuraMissingTextEdit:SetText((s and s.reminderText) or "")
+        if f.buffAuraDesatCheck then
+            f.buffAuraDesatCheck:SetShown(showBuffAuraSub)
+            f.buffAuraDesatLabel:SetShown(showBuffAuraSub)
+            if showBuffAuraSub and s then f.buffAuraDesatCheck:SetChecked(s.desaturateOnAbsent ~= false) end
+        end
+        if f.buffAuraStacksCheck then
+            f.buffAuraStacksCheck:SetShown(showBuffAuraSub)
+            f.buffAuraStacksLabel:SetShown(showBuffAuraSub)
+            if showBuffAuraSub and s then f.buffAuraStacksCheck:SetChecked(s.showStacks ~= false) end
+        end
+        if f.buffAuraAlphaLabel then
+            f.buffAuraAlphaLabel:SetShown(showBuffAuraSub)
+            f.buffAuraAlphaEdit:SetShown(showBuffAuraSub)
+            if showBuffAuraSub and s then f.buffAuraAlphaEdit:SetText(tostring(s.alphaOnAbsent or 0.45)) end
+        end
+        if f.buffAuraSpellIDLabel then
+            f.buffAuraSpellIDLabel:SetShown(showBuffAuraSub)
+            if showBuffAuraSub and s then
+                local sid = s.auraSpellID
+                local unit = s.auraUnit or "player"
+                if sid then
+                    f.buffAuraSpellIDLabel:SetText("|cff888888Tracking: spell " .. sid .. " on " .. unit .. "|r")
+                else
+                    f.buffAuraSpellIDLabel:SetText("|cffff4444No auraSpellID set – enter spell ID above|r")
+                end
             end
         end
 
@@ -798,28 +814,24 @@ MSWA_UpdateDetailPanel = function()
                 f.chargesCheck:SetPoint("TOPLEFT", f.dropZone, "BOTTOMLEFT", -4, -8)
             end
         end
-        -- Live Aura checkbox: anchor to chargesCheck (visible) or previous visible element
-        if f.liveAuraCheck then
-            f.liveAuraCheck:ClearAllPoints()
+        -- Buff Aura checkbox: anchor to charges
+        if f.buffAuraCheck then
+            f.buffAuraCheck:ClearAllPoints()
             if f.chargesCheck and f.chargesCheck:IsShown() then
-                f.liveAuraCheck:SetPoint("TOPLEFT", f.chargesCheck, "BOTTOMLEFT", 0, -6)
+                f.buffAuraCheck:SetPoint("TOPLEFT", f.chargesCheck, "BOTTOMLEFT", 0, -6)
             elseif f.reminderBuffCheck and f.reminderBuffCheck:IsShown() then
-                f.liveAuraCheck:SetPoint("TOPLEFT", f.reminderBuffCheck, "BOTTOMLEFT", 0, -6)
-            elseif f.buffThenCDCheck and f.buffThenCDCheck:IsShown() then
-                f.liveAuraCheck:SetPoint("TOPLEFT", f.buffThenCDCheck, "BOTTOMLEFT", 0, -6)
+                f.buffAuraCheck:SetPoint("TOPLEFT", f.reminderBuffCheck, "BOTTOMLEFT", 0, -6)
             else
-                f.liveAuraCheck:SetPoint("TOPLEFT", f.dropZone, "BOTTOMLEFT", -4, -8)
+                f.buffAuraCheck:SetPoint("TOPLEFT", f.dropZone, "BOTTOMLEFT", -4, -8)
             end
         end
-        -- Anchor label: anchor to liveAura sub-settings or liveAura or chargesCheck or previous
+        -- Anchor label: anchor to buffAuraCheck sub-options (visible) or chargesCheck or prev visible
         if f._anchorLabel then
             f._anchorLabel:ClearAllPoints()
-            if showAuraSub and f.liveAuraMissingTextLabel and f.liveAuraMissingTextLabel:IsShown() then
-                f._anchorLabel:SetPoint("TOPLEFT", f.liveAuraMissingTextLabel, "BOTTOMLEFT", -22, -10)
-            elseif showAuraSub and f.liveAuraShowMissingCheck then
-                f._anchorLabel:SetPoint("TOPLEFT", f.liveAuraShowMissingCheck, "BOTTOMLEFT", -22, -10)
-            elseif f.liveAuraCheck and f.liveAuraCheck:IsShown() then
-                f._anchorLabel:SetPoint("TOPLEFT", f.liveAuraCheck, "BOTTOMLEFT", 0, -10)
+            if showBuffAuraSub and f.buffAuraSpellIDLabel then
+                f._anchorLabel:SetPoint("TOPLEFT", f.buffAuraSpellIDLabel, "BOTTOMLEFT", -22, -10)
+            elseif f.buffAuraCheck and f.buffAuraCheck:IsShown() then
+                f._anchorLabel:SetPoint("TOPLEFT", f.buffAuraCheck, "BOTTOMLEFT", 0, -10)
             elseif f.chargesCheck and f.chargesCheck:IsShown() then
                 f._anchorLabel:SetPoint("TOPLEFT", f.chargesCheck, "BOTTOMLEFT", 0, -10)
             elseif f.reminderBuffCheck and f.reminderBuffCheck:IsShown() then
@@ -954,14 +966,7 @@ local function MSWA_CreateOptionsFrame()
     f.title:SetText("Midnight Simple Auras")
 
     f.versionText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    -- Read version from .toc ## Version field so only the .toc needs updating
-    local tocVersion
-    if C_AddOns and C_AddOns.GetAddOnMetadata then
-        tocVersion = C_AddOns.GetAddOnMetadata("MidnightSimpleAuras", "Version")
-    elseif GetAddOnMetadata then
-        tocVersion = GetAddOnMetadata("MidnightSimpleAuras", "Version")
-    end
-    f.versionText:SetText("Version " .. (tocVersion or "?"))
+    f.versionText:SetText("Version 1.50")
     -- Anchor against the close button when available so it always stays top-right.
     local closeBtn = f.CloseButton or _G[f:GetName() .. "CloseButton"]
     if closeBtn then
@@ -2171,10 +2176,10 @@ end
         local s2 = MSWA_GetAuraSettings and MSWA_GetAuraSettings(key) or nil
         local gs = s2 and s2.glow or {}
         local curCond = gs.condition or "ALWAYS"
-        local isAutoBuff = s2 and (s2.auraMode == "AUTOBUFF" or s2.auraMode == "BUFF_THEN_CD" or s2.auraMode == "REMINDER_BUFF" or s2.auraMode == "CHARGES" or s2.auraMode == "AURA")
+        local isAutoBuff = s2 and (s2.auraMode == "AUTOBUFF" or s2.auraMode == "BUFF_THEN_CD" or s2.auraMode == "REMINDER_BUFF" or s2.auraMode == "CHARGES")
 
         for _, condKey in ipairs(MSWA.GLOW_COND_ORDER or {}) do
-            -- Timer conditions available for AUTOBUFF / BUFF_THEN_CD / REMINDER_BUFF / AURA (we compute remaining ourselves)
+            -- Timer conditions available for AUTOBUFF / BUFF_THEN_CD / REMINDER_BUFF (we compute remaining ourselves)
             if isAutoBuff or (condKey ~= "TIMER_BELOW" and condKey ~= "TIMER_ABOVE") then
                 local info = UIDropDownMenu_CreateInfo()
                 info.text = MSWA.GLOW_CONDITIONS[condKey] or condKey
@@ -2323,7 +2328,7 @@ end
         UIDropDownMenu_SetText(f.glowTypeDrop, (MSWA.GLOW_TYPES or {})[glowType] or "Pixel Glow")
 
         -- Condition dropdown text
-        local isAutoBuff2 = s2 and (s2.auraMode == "AUTOBUFF" or s2.auraMode == "BUFF_THEN_CD" or s2.auraMode == "REMINDER_BUFF" or s2.auraMode == "CHARGES" or s2.auraMode == "AURA")
+        local isAutoBuff2 = s2 and (s2.auraMode == "AUTOBUFF" or s2.auraMode == "BUFF_THEN_CD" or s2.auraMode == "REMINDER_BUFF" or s2.auraMode == "CHARGES")
         -- Timer conditions work for AUTOBUFF / BUFF_THEN_CD / REMINDER_BUFF; reset for spell/item CDs
         if not isAutoBuff2 and (cond == "TIMER_BELOW" or cond == "TIMER_ABOVE") then
             cond = "ALWAYS"
@@ -2428,7 +2433,7 @@ end
     f.addLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormal"); f.addLabel:SetPoint("TOPLEFT", f.detailName, "BOTTOMLEFT", 0, -14); f.addLabel:SetText("Add ID:")
     f.addEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate"); f.addEdit:SetSize(80, 20); f.addEdit:SetPoint("LEFT", f.addLabel, "RIGHT", 6, 0); f.addEdit:SetAutoFocus(false); f.addEdit:SetNumeric(true)
     f.idTypeLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.idTypeLabel:SetPoint("LEFT", f.addEdit, "RIGHT", 8, 0); f.idTypeLabel:SetText("Type:")
-    f.idTypeDrop = CreateFrame("Frame", "MSWA_IDTypeDropDown", gp, "UIDropDownMenuTemplate"); f.idTypeDrop:SetPoint("LEFT", f.idTypeLabel, "RIGHT", -10, -3); UIDropDownMenu_SetWidth(f.idTypeDrop, 100)
+    f.idTypeDrop = CreateFrame("Frame", "MSWA_IDTypeDropDown", gp, "UIDropDownMenuTemplate"); f.idTypeDrop:SetPoint("LEFT", f.idTypeLabel, "RIGHT", -10, -3); UIDropDownMenu_SetWidth(f.idTypeDrop, 140)
     f.addButton = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate"); f.addButton:SetSize(60, 20); f.addButton:SetPoint("LEFT", f.idTypeDrop, "RIGHT", 0, 3); f.addButton:SetText("Add")
     f.hint = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.hint:SetPoint("TOPLEFT", f.addLabel, "BOTTOMLEFT", 0, -10); f.hint:SetWidth(420); f.hint:SetJustifyH("LEFT"); f.hint:SetWordWrap(true)
     f.hint:SetText("Enter an ID or drag a spell / item from Spellbook or Bags onto the drop zone below. Type: Item for trinkets, Auto Buff for spell buffs, Item Buff for trinket/item buffs.")
@@ -2458,28 +2463,9 @@ end
     f.dropZone.label:SetPoint("LEFT", f.dropZone.icon, "RIGHT", 8, 0)
     f.dropZone.label:SetText("|cff888888Drop Spell or Item here|r")
 
-    -- Tooltip helper: anchors GameTooltip to the RIGHT of the checkbox label
-    -- so it never covers the panel content below.
-    -- Uses HookScript to preserve ChatConfigCheckButtonTemplate highlight behavior.
-    local function AttachModeTooltip(check, label, title, body)
-        local anchor = label or check
-        check:HookScript("OnEnter", function(self)
-            GameTooltip:SetOwner(anchor, "ANCHOR_RIGHT", 8, 0)
-            GameTooltip:ClearLines()
-            GameTooltip:AddLine(title, 1, 0.82, 0, true)
-            GameTooltip:AddLine(" ")
-            GameTooltip:AddLine(body, 1, 1, 1, true)
-            GameTooltip:Show()
-        end)
-        check:HookScript("OnLeave", function() GameTooltip:Hide() end)
-    end
-
     f.autoBuffCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate"); f.autoBuffCheck:SetPoint("TOPLEFT", f.dropZone, "BOTTOMLEFT", -4, -8)
     f.autoBuffLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.autoBuffLabel:SetPoint("LEFT", f.autoBuffCheck, "RIGHT", 2, 0)
     f.autoBuffLabel:SetText("|cffffcc00Auto Buff mode|r  (show icon only while buff is active)")
-    AttachModeTooltip(f.autoBuffCheck, f.autoBuffLabel,
-        "Auto Buff / Buff Timer",
-        "Shows the icon with a countdown timer when you cast the spell or use the item. Duration is set manually below.\n\nThe timer is client-side and will reset on /reload.\n\nBest for: proc-based effects, trinket use buffs, or any ability where you want a simple visual timer after casting.")
 
     -- Buff → Cooldown checkbox
     f.buffThenCDCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
@@ -2487,9 +2473,6 @@ end
     f.buffThenCDLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     f.buffThenCDLabel:SetPoint("LEFT", f.buffThenCDCheck, "RIGHT", 2, 0)
     f.buffThenCDLabel:SetText("|cff44ffaaBuff -> Cooldown|r  (buff timer first, then cooldown)")
-    AttachModeTooltip(f.buffThenCDCheck, f.buffThenCDLabel,
-        "Buff then Cooldown",
-        "Two-phase tracker: first shows a buff timer (manual duration), then seamlessly transitions to the real cooldown swipe.\n\nThe buff phase resets on /reload, but the cooldown phase reads live data.\n\nBest for: abilities with an active buff effect followed by a cooldown, like defensive cooldowns or on-use trinkets.")
 
     f.buffDurLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.buffDurLabel:SetPoint("TOPLEFT", f.buffThenCDCheck, "BOTTOMLEFT", 22, -6); f.buffDurLabel:SetText("Buff duration (sec):")
     f.buffDurEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate"); f.buffDurEdit:SetSize(60, 20); f.buffDurEdit:SetPoint("LEFT", f.buffDurLabel, "RIGHT", 6, 0); f.buffDurEdit:SetAutoFocus(false)
@@ -2505,7 +2488,7 @@ end
             if f.buffThenCDCheck then f.buffThenCDCheck:SetChecked(false) end
             if f.reminderBuffCheck then f.reminderBuffCheck:SetChecked(false) end
             if f.chargesCheck then f.chargesCheck:SetChecked(false) end
-            if f.liveAuraCheck then f.liveAuraCheck:SetChecked(false) end
+            if f.buffAuraCheck then f.buffAuraCheck:SetChecked(false) end; if MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
         else
             s2.auraMode = nil; MSWA._autoBuff[key] = nil
         end
@@ -2520,7 +2503,7 @@ end
             if f.autoBuffCheck then f.autoBuffCheck:SetChecked(false) end
             if f.reminderBuffCheck then f.reminderBuffCheck:SetChecked(false) end
             if f.chargesCheck then f.chargesCheck:SetChecked(false) end
-            if f.liveAuraCheck then f.liveAuraCheck:SetChecked(false) end
+            if f.buffAuraCheck then f.buffAuraCheck:SetChecked(false) end; if MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
         else
             s2.auraMode = nil; MSWA._autoBuff[key] = nil
         end
@@ -2553,15 +2536,6 @@ end
     f.hasteScaleLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     f.hasteScaleLabel:SetPoint("LEFT", f.hasteScaleCheck, "RIGHT", 2, 0)
     f.hasteScaleLabel:SetText("Haste scaling  (duration adjusts to spell haste)")
-    f.hasteScaleCheck:HookScript("OnEnter", function(self)
-        GameTooltip:SetOwner(f.hasteScaleLabel, "ANCHOR_RIGHT", 8, 0)
-        GameTooltip:ClearLines()
-        GameTooltip:AddLine("Haste Scaling", 1, 0.82, 0, true)
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("When enabled, the buff duration is automatically shortened based on your current spell haste.\n\nFor example, a 10s buff with 20% haste becomes ~8.3s.\n\nUseful for HoTs and DoTs that scale with haste.", 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    f.hasteScaleCheck:HookScript("OnLeave", function() GameTooltip:Hide() end)
     f.hasteScaleCheck:SetScript("OnClick", function(self)
         local key = MSWA.selectedSpellID; if not key then return end
         local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
@@ -2575,9 +2549,6 @@ end
     f.reminderBuffLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     f.reminderBuffLabel:SetPoint("LEFT", f.reminderBuffCheck, "RIGHT", 2, 0)
     f.reminderBuffLabel:SetText("|cffff6644Reminder Buff|r  (alert when buff is missing)")
-    AttachModeTooltip(f.reminderBuffCheck, f.reminderBuffLabel,
-        "Reminder Buff",
-        "Shows a warning icon with custom text when the buff is NOT active. The icon appears grayed out with your reminder text (e.g. \"MISSING!\") when the buff expires.\n\nTriggers when you cast the spell, timer is manual.\n\nBest for: self-buffs you need to maintain like poisons, weapon imbues, or class buffs. Enable 'Persists through death' for buffs that survive dying.")
 
     f.reminderBuffCheck:SetScript("OnClick", function(self)
         local key = MSWA.selectedSpellID; if not key then return end
@@ -2590,7 +2561,7 @@ end
             if f.autoBuffCheck then f.autoBuffCheck:SetChecked(false) end
             if f.buffThenCDCheck then f.buffThenCDCheck:SetChecked(false) end
             if f.chargesCheck then f.chargesCheck:SetChecked(false) end
-            if f.liveAuraCheck then f.liveAuraCheck:SetChecked(false) end
+            if f.buffAuraCheck then f.buffAuraCheck:SetChecked(false) end; if MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
         else
             s2.auraMode = nil; MSWA._autoBuff[key] = nil
         end
@@ -2603,15 +2574,6 @@ end
     f.reminderPersistDeathLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     f.reminderPersistDeathLabel:SetPoint("LEFT", f.reminderPersistDeathCheck, "RIGHT", 2, 0)
     f.reminderPersistDeathLabel:SetText("Persists through death  (poisons, flasks)")
-    f.reminderPersistDeathCheck:HookScript("OnEnter", function(self)
-        GameTooltip:SetOwner(f.reminderPersistDeathLabel, "ANCHOR_RIGHT", 8, 0)
-        GameTooltip:ClearLines()
-        GameTooltip:AddLine("Persist Through Death", 1, 0.82, 0, true)
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("When enabled, the buff timer does not reset when you die.\n\nEnable this for buffs that persist through death, like rogue poisons, shaman weapon imbues, or flasks.", 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    f.reminderPersistDeathCheck:HookScript("OnLeave", function() GameTooltip:Hide() end)
     f.reminderPersistDeathCheck:SetScript("OnClick", function(self)
         local key = MSWA.selectedSpellID; if not key then return end
         local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
@@ -2693,9 +2655,6 @@ end
     f.chargesLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     f.chargesLabel:SetPoint("LEFT", f.chargesCheck, "RIGHT", 2, 0)
     f.chargesLabel:SetText("|cff44ddffCharges|r  (user-defined charges, countdown per charge, gray at 0)")
-    AttachModeTooltip(f.chargesCheck, f.chargesLabel,
-        "Manual Charges",
-        "Tracks a user-defined number of charges (e.g. 3/3). Each cast consumes one charge, and charges recharge over a set duration.\n\nThe charge count is client-side and will reset on /reload.\n\nBest for: abilities with charges where you want to see remaining charges and recharge progress, like Fire Blast or healing cooldowns.")
 
     f.chargesCheck:SetScript("OnClick", function(self)
         local key = MSWA.selectedSpellID; if not key then return end
@@ -2710,7 +2669,7 @@ end
             if f.autoBuffCheck then f.autoBuffCheck:SetChecked(false) end
             if f.buffThenCDCheck then f.buffThenCDCheck:SetChecked(false) end
             if f.reminderBuffCheck then f.reminderBuffCheck:SetChecked(false) end
-            if f.liveAuraCheck then f.liveAuraCheck:SetChecked(false) end
+            if f.buffAuraCheck then f.buffAuraCheck:SetChecked(false) end; if MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
         else
             s2.auraMode = nil
             if MSWA._charges then MSWA._charges[key] = nil end
@@ -2718,72 +2677,94 @@ end
         MSWA_UpdateDetailPanel(); MSWA_RequestUpdateSpells()
     end)
 
-    -- Live Aura checkbox (fifth radio-style option)
-    f.liveAuraCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.liveAuraCheck:SetPoint("TOPLEFT", f.chargesCheck, "BOTTOMLEFT", 0, -6)
-    f.liveAuraLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.liveAuraLabel:SetPoint("LEFT", f.liveAuraCheck, "RIGHT", 2, 0)
-    f.liveAuraLabel:SetText("|cff00ff88Live Aura|r  (real buff tracking from server, survives /reload)")
-    AttachModeTooltip(f.liveAuraCheck, f.liveAuraLabel,
-        "Live Aura Tracking",
-        "Reads real buff data directly from the server. The duration, stacks, and cooldown timer are all live and survive /reload — no manual duration setup needed.\n\nWhen the buff expires, the icon hides (or shows grayed out if 'Show when missing' is enabled).\n\nBest for: healer HoTs (Rejuv, Renew, Riptide), raid buffs (MotW, Fortitude, Intellect), poisons, weapon imbues, and any aura on Blizzard's non-secret spell list.")
+    -- Buff Aura checkbox (fifth radio-style option)
+    f.buffAuraCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
+    f.buffAuraCheck:SetPoint("TOPLEFT", f.chargesCheck, "BOTTOMLEFT", 0, -6)
+    f.buffAuraLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.buffAuraLabel:SetPoint("LEFT", f.buffAuraCheck, "RIGHT", 2, 0)
+    f.buffAuraLabel:SetText("|cff55bbffBuff Aura|r  (track live buff via UNIT_AURA, secret-safe)")
 
-    f.liveAuraCheck:SetScript("OnClick", function(self)
+    f.buffAuraCheck:SetScript("OnClick", function(self)
         local key = MSWA.selectedSpellID; if not key then return end
         local db2 = MSWA_GetDB(); local s2 = select(1, MSWA_GetOrCreateSpellSettings(db2, key))
         if self:GetChecked() then
-            s2.auraMode = "AURA"
+            s2.auraMode = "BUFF_AURA"; s2.auraUnit = s2.auraUnit or "player"
+            if s2.showWhenAbsent == nil then s2.showWhenAbsent = false end
+            if s2.desaturateOnAbsent == nil then s2.desaturateOnAbsent = true end
+            if s2.alphaOnAbsent == nil then s2.alphaOnAbsent = 0.45 end
+            if s2.showStacks == nil then s2.showStacks = true end
+            -- Register buff watch
+            local sid = MSWA_KeyToSpellID(key) or MSWA_KeyToItemID(key)
+            if sid then s2.auraSpellID = sid; if MSWA_RegisterBuffWatch then MSWA_RegisterBuffWatch(tostring(key), sid, s2.auraUnit or "player") end end
+            -- Uncheck other modes
             if f.autoBuffCheck then f.autoBuffCheck:SetChecked(false) end
             if f.buffThenCDCheck then f.buffThenCDCheck:SetChecked(false) end
             if f.reminderBuffCheck then f.reminderBuffCheck:SetChecked(false) end
             if f.chargesCheck then f.chargesCheck:SetChecked(false) end
         else
             s2.auraMode = nil
+            if MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
         end
         MSWA_UpdateDetailPanel(); MSWA_RequestUpdateSpells()
     end)
 
-    -- Live Aura sub-setting: Show when missing
-    f.liveAuraShowMissingCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.liveAuraShowMissingCheck:SetPoint("TOPLEFT", f.liveAuraCheck, "BOTTOMLEFT", 22, -2)
-    f.liveAuraShowMissingLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.liveAuraShowMissingLabel:SetPoint("LEFT", f.liveAuraShowMissingCheck, "RIGHT", 2, 0)
-    f.liveAuraShowMissingLabel:SetText("Show when missing  (grayed out icon when buff is not active)")
-    f.liveAuraShowMissingCheck:HookScript("OnEnter", function(self)
-        GameTooltip:SetOwner(f.liveAuraShowMissingLabel, "ANCHOR_RIGHT", 8, 0)
-        GameTooltip:ClearLines()
-        GameTooltip:AddLine("Show When Missing", 1, 0.82, 0, true)
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("When enabled, the icon stays visible even when the buff is not active — shown grayed out and desaturated.\n\nYou can also set a missing text below (e.g. \"MISSING!\") that appears on the icon.\n\nWhen disabled, the icon simply hides when the buff expires.", 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    f.liveAuraShowMissingCheck:HookScript("OnLeave", function() GameTooltip:Hide() end)
-    f.liveAuraShowMissingCheck:SetScript("OnClick", function(self)
+    -- Buff Aura sub-options
+    f.buffAuraAbsentCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
+    f.buffAuraAbsentCheck:SetPoint("TOPLEFT", f.buffAuraCheck, "BOTTOMLEFT", 20, -2)
+    f.buffAuraAbsentLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.buffAuraAbsentLabel:SetPoint("LEFT", f.buffAuraAbsentCheck, "RIGHT", 2, 0)
+    f.buffAuraAbsentLabel:SetText("Show when absent (dimmed)")
+    f.buffAuraAbsentCheck:SetScript("OnClick", function(self)
         local key = MSWA.selectedSpellID; if not key then return end
         local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.auraTrackShowMissing = self:GetChecked() and true or nil
+        s2.showWhenAbsent = self:GetChecked() and true or false
         MSWA_RequestUpdateSpells()
     end)
 
-    -- Live Aura sub-setting: Missing text
-    f.liveAuraMissingTextLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.liveAuraMissingTextLabel:SetPoint("TOPLEFT", f.liveAuraShowMissingCheck, "BOTTOMLEFT", 0, -6)
-    f.liveAuraMissingTextLabel:SetText("Missing text:")
-    f.liveAuraMissingTextEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate")
-    f.liveAuraMissingTextEdit:SetSize(120, 20); f.liveAuraMissingTextEdit:SetPoint("LEFT", f.liveAuraMissingTextLabel, "RIGHT", 6, 0); f.liveAuraMissingTextEdit:SetAutoFocus(false)
-    local function ApplyLiveAuraMissingText()
+    f.buffAuraDesatCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
+    f.buffAuraDesatCheck:SetPoint("TOPLEFT", f.buffAuraAbsentCheck, "BOTTOMLEFT", 0, -2)
+    f.buffAuraDesatLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.buffAuraDesatLabel:SetPoint("LEFT", f.buffAuraDesatCheck, "RIGHT", 2, 0)
+    f.buffAuraDesatLabel:SetText("Desaturate icon when absent")
+    f.buffAuraDesatCheck:SetScript("OnClick", function(self)
         local key = MSWA.selectedSpellID; if not key then return end
         local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local t = f.liveAuraMissingTextEdit:GetText()
-        s2.reminderText = (t and t ~= "") and t or nil
-        MSWA_InvalidateIconCache()
-    end
-    f.liveAuraMissingTextEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyLiveAuraMissingText() end)
-    f.liveAuraMissingTextEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    f.liveAuraMissingTextEdit:SetScript("OnEditFocusLost", ApplyLiveAuraMissingText)
+        s2.desaturateOnAbsent = self:GetChecked() and true or false
+        MSWA_RequestUpdateSpells()
+    end)
 
-    -- Anchor
-    local labelA = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); labelA:SetPoint("TOPLEFT", f.chargesCheck, "BOTTOMLEFT", 0, -10); labelA:SetText("Anchor to frame:")
+    f.buffAuraStacksCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
+    f.buffAuraStacksCheck:SetPoint("TOPLEFT", f.buffAuraDesatCheck, "BOTTOMLEFT", 0, -2)
+    f.buffAuraStacksLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.buffAuraStacksLabel:SetPoint("LEFT", f.buffAuraStacksCheck, "RIGHT", 2, 0)
+    f.buffAuraStacksLabel:SetText("Show stack count")
+    f.buffAuraStacksCheck:SetScript("OnClick", function(self)
+        local key = MSWA.selectedSpellID; if not key then return end
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+        s2.showStacks = self:GetChecked() and true or false
+        MSWA_RequestUpdateSpells()
+    end)
+
+    f.buffAuraAlphaLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.buffAuraAlphaLabel:SetPoint("TOPLEFT", f.buffAuraStacksCheck, "BOTTOMLEFT", 22, -4)
+    f.buffAuraAlphaLabel:SetText("Absent alpha:")
+    f.buffAuraAlphaEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate")
+    f.buffAuraAlphaEdit:SetSize(50, 18); f.buffAuraAlphaEdit:SetPoint("LEFT", f.buffAuraAlphaLabel, "RIGHT", 6, 0); f.buffAuraAlphaEdit:SetAutoFocus(false)
+    f.buffAuraAlphaEdit:SetScript("OnEnterPressed", function(self)
+        local key = MSWA.selectedSpellID; if not key then return end
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+        local v = tonumber(self:GetText()) or 0.45
+        if v < 0 then v = 0 elseif v > 1 then v = 1 end
+        s2.alphaOnAbsent = v; self:SetText(tostring(v)); self:ClearFocus()
+        MSWA_RequestUpdateSpells()
+    end)
+    f.buffAuraAlphaEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+    f.buffAuraSpellIDLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    f.buffAuraSpellIDLabel:SetPoint("TOPLEFT", f.buffAuraAlphaLabel, "BOTTOMLEFT", 0, -4)
+
+    -- Anchor (after buffAuraCheck when visible, otherwise after chargesCheck)
+    local labelA = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); labelA:SetPoint("TOPLEFT", f.buffAuraCheck, "BOTTOMLEFT", 0, -10); labelA:SetText("Anchor to frame:")
     f._anchorLabel = labelA
     f.detailA = CreateFrame("EditBox", nil, gp, "InputBoxTemplate"); f.detailA:SetSize(260, 20); f.detailA:SetPoint("LEFT", labelA, "RIGHT", 6, 0); f.detailA:SetAutoFocus(false)
     f.detailACD = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate"); f.detailACD:SetSize(110, 22); f.detailACD:SetPoint("TOPLEFT", labelA, "BOTTOMLEFT", 0, -10); f.detailACD:SetText("CD Manager")
@@ -2791,8 +2772,8 @@ end
     f.detailApply = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate"); f.detailApply:SetSize(80, 22); f.detailApply:SetPoint("TOPLEFT", f.detailACD, "BOTTOMLEFT", 0, -8); f.detailApply:SetText("Reset Pos")
     f.detailDefault = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate"); f.detailDefault:SetSize(80, 22); f.detailDefault:SetPoint("LEFT", f.detailApply, "RIGHT", 6, 0); f.detailDefault:SetText("Default")
 
-    -- Set scroll child height for General panel
-    gp:SetHeight(650)
+    -- Set scroll child height for General panel (increased for BUFF_AURA controls)
+    gp:SetHeight(850)
 
     -- Display tab
     f.displayPanel = CreateFrame("Frame", nil, rightPanel); f.displayPanel:SetPoint("TOPLEFT", 12, -60); f.displayPanel:SetPoint("BOTTOMRIGHT", -12, 12); f.displayPanel:Hide()
@@ -3727,75 +3708,44 @@ end
     f.detailXMinus:SetScript("OnClick", function() NudgeOffset("X", -1) end); f.detailXPlus:SetScript("OnClick", function() NudgeOffset("X", 1) end)
     f.detailYMinus:SetScript("OnClick", function() NudgeOffset("Y", -1) end); f.detailYPlus:SetScript("OnClick", function() NudgeOffset("Y", 1) end)
 
-    -- ID type dropdown (with tooltips and section headers)
+    -- ID type dropdown
     f.idType = "AUTO"
-
-    -- Mode definitions: { key, label, tooltip, isSpellOnly }
-    local MODE_DEFS = {
-        -- Basic
-        { key = "AUTO",    label = "Auto-Detect",
-          tip = "Automatically detects whether the ID is a spell or item and tracks its cooldown." },
-        { key = "SPELL",   label = "Spell Cooldown",
-          tip = "Track a spell's cooldown. Shows the icon with a cooldown swipe when used." },
-        { key = "ITEM",    label = "Item Cooldown",
-          tip = "Track an item's cooldown (trinkets, potions, etc). Uses the item ID." },
-
-        { header = "Buff Timers" },
-        { key = "AUTOBUFF",       label = "Spell Buff Timer",
-          tip = "Shows the icon for a fixed duration after you cast the spell. Duration is set manually. Resets on /reload." },
-        { key = "ITEMBUFF",       label = "Item Buff Timer",
-          tip = "Shows the icon for a fixed duration after using the item. Duration is set manually. Resets on /reload." },
-        { key = "BUFF_THEN_CD",   label = "Spell Buff \124cff888888then\124r CD",
-          tip = "Buff timer phase first, then seamlessly transitions to show the remaining cooldown. Useful for spells with a buff effect followed by a cooldown." },
-        { key = "ITEMBUFF_THEN_CD", label = "Item Buff \124cff888888then\124r CD",
-          tip = "Buff timer phase first (manual duration), then transitions to the item's real cooldown." },
-
-        { header = "Alerts & Tracking" },
-        { key = "REMINDER_BUFF",  label = "Spell Reminder",
-          tip = "Shows a warning when the buff is NOT active. Useful for maintaining self-buffs. Triggers on cast, timer is manual." },
-        { key = "ITEM_REMINDER",  label = "Item Reminder",
-          tip = "Shows a warning when the item buff is NOT active. Useful for flasks, weapon oils, etc." },
-        { key = "LIVE_AURA",      label = "\124cff00ff88Live Aura\124r",
-          tip = "Reads real buff data directly from the server. Duration, stacks and timer survive /reload — no manual setup needed. Best for tracking healer HoTs, raid buffs, poisons, and any buff on Blizzard's non-secret list." },
-
-        { header = "Charges" },
-        { key = "SPELL_CHARGES",  label = "Spell Charges",
-          tip = "Manually defined charge system (e.g. 3/3). Consumes a charge on cast and recharges over a set duration." },
-        { key = "ITEM_CHARGES",   label = "Item Charges",
-          tip = "Manually defined charge system for items. Consumes a charge on use and recharges over a set duration." },
-    }
-
-    UIDropDownMenu_Initialize(f.idTypeDrop, function(self, level)
-        if not level then return end
-        for _, entry in ipairs(MODE_DEFS) do
-            if entry.header then
-                -- Section header (non-clickable separator)
-                local info = UIDropDownMenu_CreateInfo()
-                info.text = entry.header
-                info.isTitle = true
-                info.notCheckable = true
-                UIDropDownMenu_AddButton(info, level)
-            else
-                local info = UIDropDownMenu_CreateInfo()
-                info.text = entry.label
-                info.value = entry.key
-                info.checked = (f.idType == entry.key)
-                info.func = function()
-                    f.idType = entry.key
-                    UIDropDownMenu_SetSelectedValue(f.idTypeDrop, entry.key)
-                    UIDropDownMenu_SetText(f.idTypeDrop, entry.label)
-                end
-                -- Hover tooltip (anchored to button, not blocking)
-                if entry.tip then
-                    info.tooltipTitle    = entry.label:gsub("\124c%x%x%x%x%x%x%x%x", ""):gsub("\124r", "")
-                    info.tooltipText     = entry.tip
-                    info.tooltipOnButton = true
-                end
-                UIDropDownMenu_AddButton(info, level)
-            end
+    UIDropDownMenu_Initialize(f.idTypeDrop, function(self, level) if not level then return end
+        local function AddTitle(text)
+            local info = UIDropDownMenu_CreateInfo()
+            info.isTitle = true; info.notCheckable = true; info.text = text
+            UIDropDownMenu_AddButton(info, level)
         end
+        local function Add(text, typeKey, tip)
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = text; info.value = typeKey
+            info.func = function() f.idType = typeKey; UIDropDownMenu_SetSelectedValue(f.idTypeDrop, typeKey); UIDropDownMenu_SetText(f.idTypeDrop, text) end
+            info.checked = (f.idType == typeKey)
+            if tip then info.tooltipTitle = text; info.tooltipText = tip; info.tooltipOnButton = true end
+            UIDropDownMenu_AddButton(info, level)
+        end
+        AddTitle("|cff888888— Basic —|r")
+        Add("Auto",           "AUTO",           "Automatically detects spell or item by ID.")
+        Add("Spell Cooldown", "SPELL",          "Track a spell's cooldown timer.")
+        Add("Item Cooldown",  "ITEM",           "Track an item's cooldown\n(trinkets, potions, on-use gear).")
+
+        AddTitle("|cff888888— Buff Aura —|r")
+        Add("|cff55bbffBuff Aura|r",     "BUFF_AURA",      "Track a live buff on the player.\nShows active/absent state.\nIdeal for poisons, enchants, raid buffs.\nSecret-safe for Midnight 12.0.")
+        Add("|cff55bbffItem Buff Aura|r", "ITEM_BUFF_AURA", "Buff Aura linked to an item ID.\nFor item-triggered buffs (flasks, food etc.).")
+
+        AddTitle("|cff888888— Timer Modes —|r")
+        Add("Auto Buff",     "AUTOBUFF",        "Countdown timer after spell cast.\nIcon shows while timer runs, hides when done.")
+        Add("Item Buff",     "ITEMBUFF",         "Countdown timer after item use.\nIcon shows while timer runs, hides when done.")
+        Add("|cff44ffaaBuff \226\134\146 CD|r",  "BUFF_THEN_CD",    "Buff timer first, then shows cooldown.\nFor abilities with a buff phase + cooldown.")
+        Add("|cff44ffaaItem Buff \226\134\146 CD|r", "ITEMBUFF_THEN_CD", "Item buff timer first, then shows cooldown.\nFor items with a buff phase + cooldown.")
+
+        AddTitle("|cff888888— Special —|r")
+        Add("|cffff6644Reminder|r",      "REMINDER_BUFF",   "Alert when buff is MISSING.\nShows custom reminder text when absent.\nGreat for missing poisons, class buffs.")
+        Add("|cffff6644Item Reminder|r", "ITEM_REMINDER",   "Alert when item buff is MISSING.\nFlask/food buff reminders.")
+        Add("Spell Charges", "SPELL_CHARGES",   "Track multiple charges (Chi Torpedo, Roll, etc.).\nShows charge count + recharge cooldown.")
+        Add("Item Charges",  "ITEM_CHARGES",    "Track charges on an item.\nShows remaining charges.")
     end)
-    UIDropDownMenu_SetSelectedValue(f.idTypeDrop, "AUTO"); UIDropDownMenu_SetText(f.idTypeDrop, "Auto-Detect")
+    UIDropDownMenu_SetSelectedValue(f.idTypeDrop, "AUTO"); UIDropDownMenu_SetText(f.idTypeDrop, "Auto")
 
     -- Add from UI
     local function ReplaceDraftWithNewKey(oldKey, newKey) local db = MSWA_GetDB(); db.spellSettings = db.spellSettings or {}; db.trackedSpells = db.trackedSpells or {}
@@ -3837,10 +3787,26 @@ end
             if IsAlreadyItem(id) then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end
             db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}; s.auraMode = "CHARGES"; if not s.chargeMax then s.chargeMax = 3 end; if not s.chargeDuration then s.chargeDuration = 0 end; db.spellSettings[newKey] = s
             MSWA._charges = MSWA._charges or {}; MSWA._charges[newKey] = { remaining = s.chargeMax, rechargeStart = 0 }
-        elseif mode == "LIVE_AURA" then
-            local name = MSWA_GetSpellName(id); if not name then return end
+        elseif mode == "BUFF_AURA" then
             if IsAlreadySpell(id) then newKey = MSWA_NewSpellInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedSpells[id] = true; newKey = id end
-            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}; s.auraMode = "AURA"; s.auraTrackShowMissing = true; db.spellSettings[newKey] = s
+            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}
+            s.auraMode = "BUFF_AURA"; s.auraSpellID = id; s.auraUnit = "player"
+            if s.showWhenAbsent == nil then s.showWhenAbsent = false end
+            if s.desaturateOnAbsent == nil then s.desaturateOnAbsent = true end
+            if s.alphaOnAbsent == nil then s.alphaOnAbsent = 0.45 end
+            if s.showStacks == nil then s.showStacks = true end
+            db.spellSettings[newKey] = s
+            if MSWA_RegisterBuffWatch then MSWA_RegisterBuffWatch(tostring(newKey), id, "player") end
+        elseif mode == "ITEM_BUFF_AURA" then
+            if IsAlreadyItem(id) then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end
+            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}
+            s.auraMode = "BUFF_AURA"; s.auraSpellID = id; s.auraUnit = "player"
+            if s.showWhenAbsent == nil then s.showWhenAbsent = false end
+            if s.desaturateOnAbsent == nil then s.desaturateOnAbsent = true end
+            if s.alphaOnAbsent == nil then s.alphaOnAbsent = 0.45 end
+            if s.showStacks == nil then s.showStacks = true end
+            db.spellSettings[newKey] = s
+            if MSWA_RegisterBuffWatch then MSWA_RegisterBuffWatch(tostring(newKey), id, "player") end
         else local name = MSWA_GetSpellName(id); if name then if IsAlreadySpell(id) then newKey = MSWA_NewSpellInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedSpells[id] = true; newKey = id end else if IsAlreadyItem(id) then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end end end
         local oldKey = MSWA.selectedSpellID; if oldKey and MSWA_IsDraftKey(oldKey) and newKey then ReplaceDraftWithNewKey(oldKey, newKey) end
         MSWA.selectedSpellID = newKey; f.addEdit:SetText(""); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
@@ -3968,7 +3934,29 @@ end
     end)
 
     -- Top button scripts
-    f.btnNew:SetScript("OnClick", function() local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}; local dk = MSWA_NewDraftKey(); db.trackedSpells[dk] = true; MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SetActiveTab("GENERAL"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList(); if f.addEdit then f.addEdit:SetFocus(); f.addEdit:HighlightText() end end)
+    f.btnNew:SetScript("OnClick", function(self)
+        if not MenuUtil or not MenuUtil.CreateContextMenu then
+            -- Fallback: simple new draft
+            local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}; local dk = MSWA_NewDraftKey(); db.trackedSpells[dk] = true; MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SetActiveTab("GENERAL"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList(); if f.addEdit then f.addEdit:SetFocus(); f.addEdit:HighlightText() end
+            return
+        end
+        MenuUtil.CreateContextMenu(self, function(ownerRegion, rootDescription)
+            rootDescription:CreateTitle("New Aura")
+            rootDescription:CreateButton("Cooldown", function()
+                local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}; local dk = MSWA_NewDraftKey(); db.trackedSpells[dk] = true; MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SetActiveTab("GENERAL"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList(); if f.addEdit then f.addEdit:SetFocus(); f.addEdit:HighlightText() end
+            end)
+            rootDescription:CreateButton("Buff Aura", function()
+                local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}; local dk = MSWA_NewDraftKey(); db.trackedSpells[dk] = true
+                db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[dk] or {}
+                s.auraMode = "BUFF_AURA"; s.auraUnit = "player"; s.showWhenAbsent = false; s.desaturateOnAbsent = true; s.alphaOnAbsent = 0.45; s.showStacks = true
+                db.spellSettings[dk] = s
+                MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SetActiveTab("GENERAL"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList(); if f.addEdit then f.addEdit:SetFocus(); f.addEdit:HighlightText() end
+            end)
+            rootDescription:CreateButton("From Template...", function()
+                if MSWA_ToggleTemplateBrowser then MSWA_ToggleTemplateBrowser() end
+            end)
+        end)
+    end)
     f.btnGroup:SetScript("OnClick", function() local gid = MSWA_CreateGroup(nil); MSWA.selectedSpellID = nil; MSWA.selectedGroupID = gid; MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList() end)
     f.btnPreview:SetScript("OnClick", function()
         MSWA.previewMode = not MSWA.previewMode
@@ -4137,7 +4125,12 @@ SlashCmdList["MIDNIGHTSIMPLEWEAKAURAS"] = function(msg)
         return
     end
 
-    MSWA_Print("Commands: /msa, /msa move, /msa lock, /msa reset, /msa add <ID>, /msa remove <ID>, /msa additem <ID>, /msa removeitem <ID>, /msa list, /msa id")
+    if cmd == "template" or cmd == "templates" or cmd == "browse" then
+        if MSWA_ToggleTemplateBrowser then MSWA_ToggleTemplateBrowser() else MSWA_Print("Template browser not loaded.") end
+        return
+    end
+
+    MSWA_Print("Commands: /msa, /msa move, /msa lock, /msa reset, /msa add <ID>, /msa remove <ID>, /msa additem <ID>, /msa removeitem <ID>, /msa list, /msa id, /msa template")
 end
 
 -----------------------------------------------------------

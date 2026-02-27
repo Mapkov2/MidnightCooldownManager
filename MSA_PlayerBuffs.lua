@@ -1,109 +1,96 @@
-local ADDON_NAME, ns = ...
+-- ########################################################
+-- MSA_PlayerBuffs.lua  (v3 – minimal event relay)
+--
+-- Buff tracking is done DIRECTLY in UpdateEngine hot-path
+-- via C_UnitAuras.GetAuraDataBySpellID() – like WeakAuras.
+--
+-- This file only provides:
+--   1) UNIT_AURA event relay → triggers UpdateEngine redraw
+--   2) Legacy compat: ns.PlayerBuffs.UpdateIcon
+--   3) Stub functions so Options code doesn't error
+--
+-- Zero pcall. Zero state. Zero registration.
+-- ########################################################
 
--- Player-buff tracking helpers (Midnight/Beta secret-safe)
--- v5: Non-secret whitelist spells skip pcall entirely
--- pcall only where Midnight secret values require it
+local ADDON_NAME, ns = ...
+local type = type
+
+-----------------------------------------------------------
+-- Event relay: UNIT_AURA on player → trigger redraw
+-----------------------------------------------------------
+
+local relay = CreateFrame("Frame", "MSWA_BuffEventFrame", UIParent)
+relay:RegisterEvent("UNIT_AURA")
+relay:RegisterEvent("PLAYER_ENTERING_WORLD")
+
+relay:SetScript("OnEvent", function(_, event, arg1)
+    if event == "UNIT_AURA" then
+        if arg1 == "player" then
+            -- Invalidate per-frame cache so next poll gets fresh data
+            if MSWA_InvalidateBuffCache then MSWA_InvalidateBuffCache() end
+            if MSWA_RequestUpdateSpells then MSWA_RequestUpdateSpells() end
+        end
+        return
+    end
+    -- PLAYER_ENTERING_WORLD: trigger initial draw
+    if MSWA_InvalidateBuffCache then MSWA_InvalidateBuffCache() end
+    if MSWA_RequestUpdateSpells then
+        MSWA_RequestUpdateSpells()
+    end
+end)
+
+-----------------------------------------------------------
+-- Stub functions (Options code references these)
+-----------------------------------------------------------
+
+function MSWA_RegisterBuffWatch()   end
+function MSWA_UnregisterBuffWatch() end
+function MSWA_ClearAllBuffWatches() end
+function MSWA_FullBuffRescan()      end
+function MSWA_BuffBootstrap()       end
+
+-----------------------------------------------------------
+-- Legacy compat: ns.PlayerBuffs.UpdateIcon
+-----------------------------------------------------------
 
 local PB = ns.PlayerBuffs or {}
 ns.PlayerBuffs = PB
 
-local pcall, type = pcall, type
-
--- v6: Named function for pcall — eliminates closure allocation
-local function _expMinusDur(exp, dur)
-    return exp - dur
-end
-
-local function ClearCooldown(cd)
-    if not cd then return end
-    cd.__mswaSet = false
-    if cd.Clear then
-        cd:Clear()
-    elseif CooldownFrame_Clear then
-        CooldownFrame_Clear(cd)
-    elseif cd.SetCooldown then
-        cd:SetCooldown(0, 0)
-    end
-end
-
-local function ApplyCooldownFromAura(cd, aura, spellID)
-    if not cd or not aura then return end
-
-    local exp = aura.expirationTime
-    local dur = aura.duration
-    local mod = aura.timeMod or 1
-
-    -- v5: Non-secret spells → direct calls, zero pcall
-    local safe = spellID and MSWA_IsNonSecret(spellID)
-
-    if cd.SetCooldownFromExpirationTime and exp ~= nil and dur ~= nil then
-        if safe then
-            cd:SetCooldownFromExpirationTime(exp, dur, mod)
-            cd.__mswaSet = true; return
-        end
-        local ok = pcall(cd.SetCooldownFromExpirationTime, cd, exp, dur, mod)
-        if ok then cd.__mswaSet = true; return end
-    end
-
-    if cd.SetCooldown and exp ~= nil and dur ~= nil then
-        if safe then
-            local startTime = exp - dur
-            cd:SetCooldown(startTime, dur, mod)
-            cd.__mswaSet = true; return
-        end
-        local ok, startTime = pcall(_expMinusDur, exp, dur)
-        if ok then
-            local ok2 = pcall(cd.SetCooldown, cd, startTime, dur, mod)
-            if ok2 then cd.__mswaSet = true; return end
-        end
-    end
-
-    ClearCooldown(cd)
-end
-
--- Reuse SpellAPI functions (already pcall-safe)
-local function GetPlayerAura(spellID)
-    return MSWA_GetPlayerAuraDataBySpellID(spellID)
-end
-
-local function GetStackText(aura, minCount, spellID)
-    return MSWA_GetAuraStackText(aura, minCount, spellID)
-end
-
 function PB.UpdateIcon(iconFrame, spellID)
     if not iconFrame or not spellID then return end
 
-    local aura = GetPlayerAura(spellID)
-
-    if aura then
+    local auraData = MSWA_GetPlayerAuraDataBySpellID(spellID)
+    if auraData then
         iconFrame.icon:SetDesaturated(false)
         iconFrame.icon:SetVertexColor(1, 1, 1)
-
-        local stackText = GetStackText(aura, 2, spellID)
+        -- Stacks via wrapper
+        local sText = MSWA_GetAuraStackText(auraData, 2)
         local target = iconFrame.stackText or iconFrame.count
         if target then
-            if type(stackText) == "string" then
-                target:SetText(stackText); target:Show()
+            if sText then target:SetText(sText); target:Show()
+            else target:SetText(""); target:Hide() end
+        end
+        -- Cooldown: EQoL issecretvalue pattern
+        local cd = iconFrame.cooldown
+        if cd then
+            local dur = auraData.duration
+            local exp = auraData.expirationTime
+            local isSecret = MSWA_IsSecretValue(dur) or MSWA_IsSecretValue(exp)
+            if isSecret and cd.SetCooldownFromExpirationTime then
+                cd:SetCooldownFromExpirationTime(exp, dur, auraData.timeMod)
+                cd.__mswaSet = true
+            elseif dur and dur > 0 and exp then
+                cd:SetCooldown(exp - dur, dur)
+                cd.__mswaSet = true
             else
-                target:SetText(""); target:Hide()
+                MSWA_ClearCooldownFrame(cd)
             end
-        end
-        if iconFrame.stackText and iconFrame.count and iconFrame.stackText ~= iconFrame.count then
-            iconFrame.count:SetText(""); iconFrame.count:Hide()
-        end
-
-        if iconFrame.cooldown then
-            ApplyCooldownFromAura(iconFrame.cooldown, aura, spellID)
         end
     else
         iconFrame.icon:SetDesaturated(true)
         iconFrame.icon:SetVertexColor(0.35, 0.35, 0.35)
-
         if iconFrame.count then iconFrame.count:SetText(""); iconFrame.count:Hide() end
         if iconFrame.stackText then iconFrame.stackText:SetText(""); iconFrame.stackText:Hide() end
-
-        if iconFrame.cooldown then
-            ClearCooldown(iconFrame.cooldown)
-        end
+        if iconFrame.cooldown then MSWA_ClearCooldownFrame(iconFrame.cooldown) end
     end
 end
