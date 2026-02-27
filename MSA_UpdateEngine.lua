@@ -695,11 +695,12 @@ local function MSWA_UpdateSpells()
                                             MSWA_ClearCooldownFrame(cd)
                                         end
                                     end
-                                    -- Stacks
-                                    if s.showStacks ~= false then
+                                    -- Stacks (v6: use styled target, respect hideStacksOnCooldown)
+                                    if s.showStacks ~= false and not (s.hideStacksOnCooldown and MSWA_IsCooldownActive(btn)) then
                                         local sText = MSWA_GetAuraStackText(auraData, 2)
-                                        if sText and btn.count then
-                                            btn.count:SetText(sText); btn.count:Show()
+                                        local sTarget = btn.stackText or btn.count
+                                        if sText and sTarget then
+                                            sTarget:SetText(sText); sTarget:Show()
                                         else
                                             ClearStackAndCount(btn)
                                         end
@@ -833,9 +834,10 @@ local function MSWA_UpdateSpells()
                                             MSWA_ApplyCooldownFrame(cd, exp - dur, dur, auraData.timeMod or 1, exp)
                                         else MSWA_ClearCooldownFrame(cd) end
                                     end
-                                    if s.showStacks ~= false then
+                                    if s.showStacks ~= false and not (s.hideStacksOnCooldown and MSWA_IsCooldownActive(btn)) then
                                         local sText = MSWA_GetAuraStackText(auraData, 2)
-                                        if sText and btn.count then btn.count:SetText(sText); btn.count:Show() else ClearStackAndCount(btn) end
+                                        local sTarget = btn.stackText or btn.count
+                                        if sText and sTarget then sTarget:SetText(sText); sTarget:Show() else ClearStackAndCount(btn) end
                                     else ClearStackAndCount(btn) end
                                     btn.icon:SetDesaturated(false); btn:SetAlpha(ComputeAlpha(s, false, inCombat))
                                 else
@@ -1216,9 +1218,10 @@ local function MSWA_UpdateSpells()
                                     MSWA_ApplyCooldownFrame(cd, exp - dur, dur, auraData.timeMod or 1, exp)
                                 else MSWA_ClearCooldownFrame(cd) end
                             end
-                            if s.showStacks ~= false then
+                            if s.showStacks ~= false and not (s.hideStacksOnCooldown and MSWA_IsCooldownActive(btn)) then
                                 local sText = MSWA_GetAuraStackText(auraData, 2)
-                                if sText and btn.count then btn.count:SetText(sText); btn.count:Show() else ClearStackAndCount(btn) end
+                                local sTarget = btn.stackText or btn.count
+                                if sText and sTarget then sTarget:SetText(sText); sTarget:Show() else ClearStackAndCount(btn) end
                             else ClearStackAndCount(btn) end
                             btn.icon:SetDesaturated(false); btn:SetAlpha(ComputeAlpha(s, false, inCombat))
                         else

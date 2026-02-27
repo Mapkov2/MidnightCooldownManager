@@ -683,6 +683,9 @@ MSWA_UpdateDetailPanel = function()
         local stackShowLabels2 = { auto = "Auto", show = "Force Show", hide = "Force Hide" }
         f.stackShowMode:SetText(stackShowLabels2[mode] or "Auto")
     end
+    if f.hideStacksOnCDCheck then
+        f.hideStacksOnCDCheck:SetChecked(s and s.hideStacksOnCooldown or false)
+    end
     if f.stackSizeEdit then
         local sz = (s and s.stackFontSize) or 12
         sz = tonumber(sz) or 12; if sz < 6 then sz = 6 end; if sz > 48 then sz = 48 end
@@ -3457,9 +3460,22 @@ end
         MSWA_RequestUpdateSpells()
     end)
 
+    -- Hide stacks on cooldown toggle (v6)
+    f.hideStacksOnCDCheck = CreateFrame("CheckButton", nil, dp, "ChatConfigCheckButtonTemplate")
+    f.hideStacksOnCDCheck:SetPoint("TOPLEFT", f.stackShowLabel, "BOTTOMLEFT", -2, -4)
+    f.hideStacksOnCDLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.hideStacksOnCDLabel:SetPoint("LEFT", f.hideStacksOnCDCheck, "RIGHT", 2, 0)
+    f.hideStacksOnCDLabel:SetText("Hide stacks while on cooldown")
+    f.hideStacksOnCDCheck:SetScript("OnClick", function(self)
+        local key = MSWA.selectedSpellID; if not key then return end
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+        s2.hideStacksOnCooldown = self:GetChecked() and true or false
+        MSWA_RequestUpdateSpells()
+    end)
+
     -- Stack Font
     f.stackFontLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.stackFontLabel:SetPoint("TOPLEFT", f.stackShowLabel, "BOTTOMLEFT", 0, -12)
+    f.stackFontLabel:SetPoint("TOPLEFT", f.hideStacksOnCDCheck, "BOTTOMLEFT", 2, -8)
     f.stackFontLabel:SetText("Font:")
     f.stackFontDrop = CreateFrame("Frame", "MSWA_StackFontDropDown", dp, "UIDropDownMenuTemplate")
     f.stackFontDrop:SetPoint("LEFT", f.stackFontLabel, "RIGHT", -10, -3)

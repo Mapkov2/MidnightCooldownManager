@@ -398,12 +398,18 @@ function MSWA_ApplyTextStyle(btn, db, s)
 end
 
 -- v4: Stack style that takes db as parameter (no internal MSWA_GetDB call)
+-- v6: Also styles btn.count so buff-tracking paths that write to count
+--     inherit the user's stack font/color/position settings.
 function MSWA_ApplyStackStyle_Fast(btn, s, db)
-    local target = btn.stackText
-    if not target then return end
+    local st = btn.stackText
+    local ct = btn.count
+    if not st and not ct then return end
     local fontKey = (s and s.stackFontKey) or (db and db.stackFontKey) or (db and db.fontKey) or "DEFAULT"
     local path = MSWA_GetFontPathFromKey(fontKey)
-    if not path and target.GetFont then path = select(1, target:GetFont()) end
+    if not path then
+        local ref = st or ct
+        if ref and ref.GetFont then path = select(1, ref:GetFont()) end
+    end
     local size = tonumber((s and s.stackFontSize) or (db and db.stackFontSize) or 12) or 12
     if size < 6 then size = 6 elseif size > 48 then size = 48 end
     local tc = (s and s.stackColor) or (db and db.stackColor)
@@ -413,10 +419,20 @@ function MSWA_ApplyStackStyle_Fast(btn, s, db)
     local baseOff = TEXT_POINT_OFFSETS[point] or TEXT_POINT_OFFSETS.BOTTOMRIGHT
     local ox = tonumber((s and s.stackOffsetX) or (db and db.stackOffsetX) or 0) or 0
     local oy = tonumber((s and s.stackOffsetY) or (db and db.stackOffsetY) or 0) or 0
-    if path then target:SetFont(path, size, "OUTLINE") end
-    target:SetTextColor(r, g, b, 1)
-    target:ClearAllPoints()
-    target:SetPoint(point, btn, point, baseOff[1] + ox, baseOff[2] + oy)
+    local px = baseOff[1] + ox
+    local py = baseOff[2] + oy
+    if st then
+        if path then st:SetFont(path, size, "OUTLINE") end
+        st:SetTextColor(r, g, b, 1)
+        st:ClearAllPoints()
+        st:SetPoint(point, btn, point, px, py)
+    end
+    if ct then
+        if path then ct:SetFont(path, size, "OUTLINE") end
+        ct:SetTextColor(r, g, b, 1)
+        ct:ClearAllPoints()
+        ct:SetPoint(point, btn, point, px, py)
+    end
 end
 
 -- Legacy: ApplyStackStyle (calls MSWA_GetDB internally - for Options UI)
@@ -437,6 +453,10 @@ function MSWA_UpdateBuffVisual_Fast(btn, s, spellID, isItem, itemID)
     end
     local showMode = (s and s.stackShowMode) or "auto"
     if showMode == "hide" then target:SetText(""); target:Hide(); return end
+    -- v6: hide stacks while cooldown is active if toggle is on
+    if s and s.hideStacksOnCooldown and MSWA_IsCooldownActive(btn) then
+        target:SetText(""); target:Hide(); return
+    end
     if isItem then
         if itemID and GetItemCount then
             local cnt = GetItemCount(itemID, false, false)
