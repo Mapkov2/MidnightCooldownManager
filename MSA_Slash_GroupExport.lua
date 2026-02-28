@@ -10,13 +10,7 @@ local function _print(msg)
 end
 
 local function _getDB()
-  -- Most addons store as MSA_DB or in MSA.db or similar. Try common patterns.
-  if type(_G.MSA_DB) == "table" then return _G.MSA_DB end
-  if type(MSA) == "table" then
-    if type(MSA.db) == "table" then return MSA.db end
-    if type(MSA.DB) == "table" then return MSA.DB end
-    if type(MSA.saved) == "table" then return MSA.saved end
-  end
+  if type(_G.MSWA_GetDB) == "function" then return _G.MSWA_GetDB() end
   return nil
 end
 
@@ -138,7 +132,18 @@ SlashCmdList.MSAG = function(msg)
   local cmd, rest = msg:match("^%s*(%S+)%s*(.-)%s*$")
 
   if not cmd or cmd == "" or cmd == "help" then
-    _print("Commands: /msag export <groupId> | /msag import")
+    _print("Commands: /msag export <groupId> | /msag import | /msag lock | /msag unlock")
+    return
+  end
+
+  if cmd == "lock" or cmd == "unlock" then
+    local db = _getDB()
+    if not db then _print("DB not found.") return end
+    db.locked = (cmd == "lock")
+    if type(_G.MSWA_UpdatePositionFromDB) == "function" then
+      _G.MSWA_UpdatePositionFromDB()
+    end
+    _print("Frame " .. cmd .. "ed.")
     return
   end
 

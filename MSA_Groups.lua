@@ -208,7 +208,9 @@ function MSWA_SetAuraGroup(key, gid)
     db.spellSettings = db.spellSettings or {}
     db.groupMembers = db.groupMembers or {}
 
-    local s = db.spellSettings[key] or {}
+    local s = db.spellSettings[key]
+    local sExisted = s ~= nil
+    if not s then s = {} end
 
     local prevGid = db.auraGroups[key]
 
@@ -263,7 +265,9 @@ function MSWA_SetAuraGroup(key, gid)
         end
     end
 
-    db.spellSettings[key] = s
+    if sExisted or db.auraGroups[key] ~= nil or next(s) ~= nil then
+        db.spellSettings[key] = s
+    end
 end
 
 -----------------------------------------------------------
