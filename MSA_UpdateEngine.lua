@@ -1748,15 +1748,21 @@ local function MSWA_UpdateSpells()
                     local remaining = 0
 
                     -- Read remaining from stored timing (set by MSWA_ApplyCooldownFrame)
-                    if cd and cd.__mswaSet and cd.__mswaExp and cd.__mswaDur then
+                    if cd and cd.__mswaSet and cd.__mswaDur then
                         local exp = cd.__mswaExp
                         local dur = cd.__mswaDur
-                        -- Secret guard
-                        if _issv2 and (_issv2(exp) or _issv2(dur)) then
+                        local st  = cd.__mswaStart
+
+                        -- Secret guard (NEVER arithmetic on secret values)
+                        if _issv2 and ((exp and _issv2(exp)) or (st and _issv2(st)) or _issv2(dur)) then
                             remaining = -1  -- secret -> skip
                         elseif dur > 1.5 then
-                            remaining = exp - now
-                            if remaining < 0 then remaining = 0 end
+                            if exp ~= nil then
+                                remaining = exp - now
+                            elseif st ~= nil then
+                                remaining = (st + dur) - now
+                            end
+                            if remaining and remaining < 0 then remaining = 0 end
                         end
                     end
 

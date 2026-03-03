@@ -114,6 +114,7 @@ function MSWA_ClearCooldownFrame(cd)
     if not cd then return end
     cd.__mswaSet = false
     cd.__mswaExp = nil
+    cd.__mswaStart = nil
     cd.__mswaDur = nil
     if cd.Clear then
         cd:Clear()
@@ -136,11 +137,17 @@ function MSWA_ApplyCooldownFrame(cd, startTime, duration, modRate, expirationTim
     if not cd then return end
     DetectCDAPI()
 
+    -- NOTE (Midnight/Beta): startTime/duration can be "secret" values.
+    -- NEVER do arithmetic on them here. We store raw timing and only
+    -- compute derived values behind an issecretvalue guard.
+    local _issv = _G.issecretvalue
+
     if cdHasExpTime and expirationTime ~= nil and duration ~= nil then
         local ok = pcall(cd.SetCooldownFromExpirationTime, cd, expirationTime, duration, modRate)
         if ok then
             cd.__mswaSet = true
             cd.__mswaExp = expirationTime
+            cd.__mswaStart = nil
             cd.__mswaDur = duration
             return
         end
@@ -150,8 +157,16 @@ function MSWA_ApplyCooldownFrame(cd, startTime, duration, modRate, expirationTim
         local ok = pcall(cd.SetCooldown, cd, startTime, duration, modRate)
         if ok then
             cd.__mswaSet = true
-            cd.__mswaExp = (startTime and duration) and (startTime + duration) or 0
+            cd.__mswaStart = startTime
             cd.__mswaDur = duration
+            -- Best-effort: only cache expiration if we can prove values are non-secret.
+            if expirationTime ~= nil and (not _issv or not _issv(expirationTime)) then
+                cd.__mswaExp = expirationTime
+            elseif _issv and (not _issv(startTime) and not _issv(duration)) then
+                cd.__mswaExp = startTime + duration
+            else
+                cd.__mswaExp = nil
+            end
             return
         end
     end
