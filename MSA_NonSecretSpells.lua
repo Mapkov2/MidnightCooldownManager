@@ -60,6 +60,9 @@ NON_SECRET[450769] = true   -- Aspect of Harmony
 NON_SECRET[974]    = true   -- Earth Shield
 NON_SECRET[383648] = true   -- Earth Shield (alt ID)
 NON_SECRET[61295]  = true   -- Riptide
+NON_SECRET[207400] = true   -- Ancestral Vigor
+NON_SECRET[382024] = true   -- Earthliving Weapon (buff)
+NON_SECRET[444490] = true   -- Hydrobubble
 
 -- Holy Paladin
 NON_SECRET[53563]   = true  -- Beacon of Light
@@ -135,6 +138,30 @@ NON_SECRET[260286] = true   -- Hunter Tip of the Spear
 -----------------------------------------------------------
 NON_SECRET[8690]  = true    -- Hearthstone
 NON_SECRET[20608] = true    -- Shaman Reincarnation
+
+-----------------------------------------------------------
+-- Sated / Exhaustion Debuffs
+-----------------------------------------------------------
+NON_SECRET[57723]  = true   -- Exhaustion (Heroism)
+NON_SECRET[57724]  = true   -- Sated (Bloodlust)
+NON_SECRET[80354]  = true   -- Temporal Displacement (Mage)
+NON_SECRET[95809]  = true   -- Hunter Pet Insanity
+NON_SECRET[160455] = true   -- Hunter Pet Fatigued
+NON_SECRET[264689] = true   -- Hunter Pet Fatigued (alt)
+NON_SECRET[390435] = true   -- Exhaustion (Evoker)
+
+-----------------------------------------------------------
+-- Deserter Debuffs
+-----------------------------------------------------------
+NON_SECRET[26013]  = true   -- BG Deserter
+NON_SECRET[71041]  = true   -- Dungeon Deserter
+
+-----------------------------------------------------------
+-- Skyriding
+-----------------------------------------------------------
+NON_SECRET[427490] = true   -- Ride Along Available
+NON_SECRET[447959] = true   -- Ride Along Active
+NON_SECRET[447960] = true   -- Ride Along Inactive
 
 -----------------------------------------------------------
 -- Public API

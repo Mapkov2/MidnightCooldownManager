@@ -614,6 +614,8 @@ MSWA_UpdateDetailPanel = function()
                 }
                 UIDropDownMenu_SetText(f.barFillDirDrop, fdLabels[fd] or fdLabels["LR"])
             end
+            -- Bar Texture
+            if f.barTextureEdit then f.barTextureEdit:SetText(s.barTexture or "") end
         end
     end
 
@@ -629,6 +631,10 @@ MSWA_UpdateDetailPanel = function()
     if f.combatAlphaSlider then
         local v = (s and tonumber(s.combatAlpha)) or 1.0
         f.combatAlphaSlider:SetValue(math.floor(v * 100 + 0.5))
+    end
+    if f.readyAlphaSlider then
+        local v = (s and tonumber(s.readyAlpha)) or 1.0
+        f.readyAlphaSlider:SetValue(math.floor(v * 100 + 0.5))
     end
 
     -- Sync conditional 2nd text color controls
@@ -1025,7 +1031,7 @@ function MSWA_InitFontDropdown()
                             f.fontPreview:SetFontObject(GameFontNormalSmall)
                         else f.fontPreview:SetFont(fontPath, 12, "") end
                     end
-                    if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+                    MSWA_InvalidateIconCache()
                 end
                 UIDropDownMenu_AddButton(info, level)
             end
@@ -1091,7 +1097,8 @@ local function MSWA_CreateOptionsFrame()
     f.title:SetText("Midnight Simple Auras")
 
     f.versionText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    f.versionText:SetText("Version 1.50")
+    local tocVer = C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata("MidnightSimpleAuras", "Version") or "?"
+    f.versionText:SetText("v" .. tocVer)
     -- Anchor against the close button when available so it always stays top-right.
     local closeBtn = f.CloseButton or _G[f:GetName() .. "CloseButton"]
     if closeBtn then
@@ -2127,6 +2134,47 @@ end
     f.groupAnchorEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyGroupSettings() end)
     f.groupAnchorEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
+    -- Anchor From / Anchor To dropdowns (Gamz: anchor from top right to bottom right at 0/0)
+    local ANCHOR_POINTS = { "CENTER", "TOPLEFT", "TOP", "TOPRIGHT", "RIGHT", "BOTTOMRIGHT", "BOTTOM", "BOTTOMLEFT", "LEFT" }
+    local gpAnchorFromLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal"); gpAnchorFromLabel:SetPoint("TOPLEFT", gpAnchorLabel, "BOTTOMLEFT", 0, -18); gpAnchorFromLabel:SetText("Anchor From")
+    f.groupPointDrop = CreateFrame("Frame", "MSWA_GroupPointDD", f.groupPanel, "UIDropDownMenuTemplate"); f.groupPointDrop:SetPoint("LEFT", gpAnchorFromLabel, "RIGHT", -6, -2); UIDropDownMenu_SetWidth(f.groupPointDrop, 110)
+    UIDropDownMenu_Initialize(f.groupPointDrop, function(self, level)
+        if not level then return end
+        for _, pt in ipairs(ANCHOR_POINTS) do
+            local info = UIDropDownMenu_CreateInfo(); info.text = pt; info.value = pt
+            info.func = function() UIDropDownMenu_SetSelectedValue(f.groupPointDrop, pt); UIDropDownMenu_SetText(f.groupPointDrop, pt); ApplyGroupSettings() end
+            info.checked = (UIDropDownMenu_GetSelectedValue(f.groupPointDrop) == pt); UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+    UIDropDownMenu_SetSelectedValue(f.groupPointDrop, "CENTER"); UIDropDownMenu_SetText(f.groupPointDrop, "CENTER")
+
+    local gpAnchorToLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal"); gpAnchorToLabel:SetPoint("LEFT", f.groupPointDrop, "RIGHT", 4, 2); gpAnchorToLabel:SetText("To")
+    f.groupRelPointDrop = CreateFrame("Frame", "MSWA_GroupRelPointDD", f.groupPanel, "UIDropDownMenuTemplate"); f.groupRelPointDrop:SetPoint("LEFT", gpAnchorToLabel, "RIGHT", -6, -2); UIDropDownMenu_SetWidth(f.groupRelPointDrop, 110)
+    UIDropDownMenu_Initialize(f.groupRelPointDrop, function(self, level)
+        if not level then return end
+        for _, pt in ipairs(ANCHOR_POINTS) do
+            local info = UIDropDownMenu_CreateInfo(); info.text = pt; info.value = pt
+            info.func = function() UIDropDownMenu_SetSelectedValue(f.groupRelPointDrop, pt); UIDropDownMenu_SetText(f.groupRelPointDrop, pt); ApplyGroupSettings() end
+            info.checked = (UIDropDownMenu_GetSelectedValue(f.groupRelPointDrop) == pt); UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+    UIDropDownMenu_SetSelectedValue(f.groupRelPointDrop, "CENTER"); UIDropDownMenu_SetText(f.groupRelPointDrop, "CENTER")
+
+    -- Growth Direction dropdown (Gamz: groups grow right by default, want left/up/down)
+    local gpGrowthLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal"); gpGrowthLabel:SetPoint("TOPLEFT", gpAnchorFromLabel, "BOTTOMLEFT", 0, -22); gpGrowthLabel:SetText("Growth Direction")
+    f.groupGrowthDrop = CreateFrame("Frame", "MSWA_GroupGrowthDD", f.groupPanel, "UIDropDownMenuTemplate"); f.groupGrowthDrop:SetPoint("LEFT", gpGrowthLabel, "RIGHT", -6, -2); UIDropDownMenu_SetWidth(f.groupGrowthDrop, 110)
+    local GROWTH_LABELS = { RIGHT = "Right", LEFT = "Left", UP = "Up", DOWN = "Down" }
+    local GROWTH_ORDER  = { "RIGHT", "LEFT", "UP", "DOWN" }
+    UIDropDownMenu_Initialize(f.groupGrowthDrop, function(self, level)
+        if not level then return end
+        for _, val in ipairs(GROWTH_ORDER) do
+            local info = UIDropDownMenu_CreateInfo(); info.text = GROWTH_LABELS[val]; info.value = val
+            info.func = function() UIDropDownMenu_SetSelectedValue(f.groupGrowthDrop, val); UIDropDownMenu_SetText(f.groupGrowthDrop, GROWTH_LABELS[val]); ApplyGroupSettings() end
+            info.checked = (UIDropDownMenu_GetSelectedValue(f.groupGrowthDrop) == val); UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+    UIDropDownMenu_SetSelectedValue(f.groupGrowthDrop, "RIGHT"); UIDropDownMenu_SetText(f.groupGrowthDrop, "Right")
+
     local function ApplyGroupSettings()
         local db = MSWA_GetDB(); local gid = MSWA.selectedGroupID; local g = gid and db.groups and db.groups[gid]; if not g then return end
         local x = tonumber(f.groupXEdit:GetText()) or g.x or 0
@@ -2137,13 +2185,18 @@ end
         if size < 8 then size = 8 end
         g.x = x; g.y = y
         g.anchorFrame = (anchorFrame ~= "" and anchorFrame) or nil
+        -- Anchor from/to
+        g.point = f.groupPointDrop and UIDropDownMenu_GetSelectedValue(f.groupPointDrop) or g.point or "CENTER"
+        g.relPoint = f.groupRelPointDrop and UIDropDownMenu_GetSelectedValue(f.groupRelPointDrop) or g.relPoint or "CENTER"
+        -- Growth direction
+        g.growthDirection = f.groupGrowthDrop and UIDropDownMenu_GetSelectedValue(f.groupGrowthDrop) or g.growthDirection or "RIGHT"
         local oldSize = g.size or MSWA.ICON_SIZE; if oldSize < 1 then oldSize = MSWA.ICON_SIZE end
-        local ratio = (oldSize and oldSize ~= 0) and (size / oldSize) or 1
-        if ratio and ratio ~= 1 and db.auraGroups and db.spellSettings then
+        -- Scale per-icon width/height if group size changed
+        if size ~= oldSize and db.auraGroups and db.spellSettings then
+            local ratio = size / oldSize
             for key, gg in pairs(db.auraGroups) do
                 if gg == gid then
                     local s = db.spellSettings[key] or {}
-                    s.x = (s.x or 0) * ratio; s.y = (s.y or 0) * ratio
                     local w = s.width or oldSize; local h = s.height or w
                     s.width = w * ratio; s.height = h * ratio
                     db.spellSettings[key] = s
@@ -2151,6 +2204,31 @@ end
             end
         end
         g.size = size
+        -- Re-layout members when growth direction changes
+        local dir = g.growthDirection or "RIGHT"
+        local step = size + MSWA.ICON_SPACE
+        if db.auraGroups and db.spellSettings then
+            local members = MSWA_EnsureGroupMembers and MSWA_EnsureGroupMembers(gid) or nil
+            if type(members) == "table" then
+                for i = 1, #members do
+                    local mkey = members[i]
+                    if db.auraGroups[mkey] == gid then
+                        local ms = db.spellSettings[mkey] or {}
+                        local idx = i - 1
+                        if dir == "LEFT" then
+                            ms.x = -(idx * step); ms.y = 0
+                        elseif dir == "UP" then
+                            ms.x = 0; ms.y = idx * step
+                        elseif dir == "DOWN" then
+                            ms.x = 0; ms.y = -(idx * step)
+                        else -- RIGHT
+                            ms.x = idx * step; ms.y = 0
+                        end
+                        db.spellSettings[mkey] = ms
+                    end
+                end
+            end
+        end
         if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
     end
 
@@ -2181,6 +2259,15 @@ end
         f.groupNameEdit:SetText(g.name or ""); f.groupXEdit:SetText(tostring(g.x or 0))
         f.groupYEdit:SetText(tostring(g.y or 0)); f.groupSizeEdit:SetText(tostring(g.size or MSWA.ICON_SIZE))
         if f.groupAnchorEdit then f.groupAnchorEdit:SetText(g.anchorFrame or "") end
+        -- Anchor from/to
+        local pt = g.point or "CENTER"
+        if f.groupPointDrop then UIDropDownMenu_SetSelectedValue(f.groupPointDrop, pt); UIDropDownMenu_SetText(f.groupPointDrop, pt) end
+        local rp = g.relPoint or pt
+        if f.groupRelPointDrop then UIDropDownMenu_SetSelectedValue(f.groupRelPointDrop, rp); UIDropDownMenu_SetText(f.groupRelPointDrop, rp) end
+        -- Growth direction
+        local dir = g.growthDirection or "RIGHT"
+        local GL = { RIGHT = "Right", LEFT = "Left", UP = "Up", DOWN = "Down" }
+        if f.groupGrowthDrop then UIDropDownMenu_SetSelectedValue(f.groupGrowthDrop, dir); UIDropDownMenu_SetText(f.groupGrowthDrop, GL[dir] or "Right") end
     end
 
     -- =========================================================
@@ -3009,7 +3096,7 @@ end
     -- ======= Bar Settings (shown only in BAR mode) =======
     f._barSettingsFrame = CreateFrame("Frame", nil, dp)
     f._barSettingsFrame:SetPoint("TOPLEFT", f.displayTypeDrop, "BOTTOMLEFT", 16, -4)
-    f._barSettingsFrame:SetSize(400, 290)
+    f._barSettingsFrame:SetSize(400, 320)
     f._barSettingsFrame:Hide()
     local bsf = f._barSettingsFrame
 
@@ -3198,6 +3285,24 @@ end
     end)
     UIDropDownMenu_SetSelectedValue(f.barFillDirDrop, "LR")
     UIDropDownMenu_SetText(f.barFillDirDrop, FILL_LABELS["LR"])
+
+    -- Bar Texture (Gamz: Buff Bars don't have option to change Texture)
+    f.barTextureLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.barTextureLabel:SetPoint("TOPLEFT", f.barFillDirLabel, "BOTTOMLEFT", 0, -12)
+    f.barTextureLabel:SetText("Texture path:")
+    f.barTextureEdit = CreateFrame("EditBox", nil, bsf, "InputBoxTemplate")
+    f.barTextureEdit:SetSize(260, 20); f.barTextureEdit:SetPoint("LEFT", f.barTextureLabel, "RIGHT", 6, 0)
+    f.barTextureEdit:SetAutoFocus(false)
+    local function SaveBarTexture()
+        local key = MSWA.selectedSpellID; if not key then return end
+        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+        local txt = (f.barTextureEdit:GetText() or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        s2.barTexture = (txt ~= "") and txt or nil
+        MSWA_InvalidateIconCache()
+    end
+    f.barTextureEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveBarTexture() end)
+    f.barTextureEdit:SetScript("OnEditFocusLost", SaveBarTexture)
+    f.barTextureEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
     -- Bar settings save handlers
     local function SaveBarSize()
@@ -3432,10 +3537,11 @@ end
     f.cdAlphaSlider, f.cdAlphaRow, f.cdAlphaVal = CreateAlphaSlider(dp, "On Cooldown:", alphaTitle, -4, "cdAlpha")
     f.oocAlphaSlider, f.oocAlphaRow, f.oocAlphaVal = CreateAlphaSlider(dp, "Out of Combat:", f.cdAlphaRow, -2, "oocAlpha")
     f.combatAlphaSlider, f.combatAlphaRow, f.combatAlphaVal = CreateAlphaSlider(dp, "In Combat:", f.oocAlphaRow, -2, "combatAlpha")
+    f.readyAlphaSlider, f.readyAlphaRow, f.readyAlphaVal = CreateAlphaSlider(dp, "When Ready:", f.combatAlphaRow, -2, "readyAlpha")
 
     -- ======= Stack Text Section =======
     local stackSep = dp:CreateTexture(nil, "ARTWORK")
-    stackSep:SetPoint("TOPLEFT", f.combatAlphaRow, "BOTTOMLEFT", 0, -10)
+    stackSep:SetPoint("TOPLEFT", f.readyAlphaRow, "BOTTOMLEFT", 0, -10)
     stackSep:SetSize(400, 1); stackSep:SetColorTexture(1, 1, 1, 0.12)
 
     f.stackShowLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -3542,7 +3648,7 @@ end
                             db2.stackFontKey = (data.key == "DEFAULT") and nil or data.key
                         end
                         UIDropDownMenu_SetText(f.stackFontDrop, data.label or data.key); CloseDropDownMenus()
-                        if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+                        MSWA_InvalidateIconCache()
                     end
                     UIDropDownMenu_AddButton(info, level)
                 end
@@ -3572,7 +3678,7 @@ end
             db.stackFontSize = v
         end
         if f.stackSizeEdit then f.stackSizeEdit:SetText(tostring(v)) end
-        if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+        MSWA_InvalidateIconCache()
     end
     if f.stackSizeEdit then
         f.stackSizeEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyStackSize() end)
@@ -3594,7 +3700,7 @@ end
             db.stackFontSize = v
         end
         if f.stackSizeEdit then f.stackSizeEdit:SetText(tostring(v)) end
-        if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+        MSWA_InvalidateIconCache()
     end)
     f.stackSizePlus:SetScript("OnClick", function()
         local key = MSWA.selectedSpellID
@@ -3612,7 +3718,7 @@ end
             db.stackFontSize = v
         end
         if f.stackSizeEdit then f.stackSizeEdit:SetText(tostring(v)) end
-        if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+        MSWA_InvalidateIconCache()
     end)
 
     -- Stack pos dropdown
@@ -3630,7 +3736,7 @@ end
                     else
                         db.stackPoint = point
                     end
-                    UIDropDownMenu_SetText(f.stackPosDrop, MSWA_GetTextPosLabel(point)); CloseDropDownMenus(); if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+                    UIDropDownMenu_SetText(f.stackPosDrop, MSWA_GetTextPosLabel(point)); CloseDropDownMenus(); MSWA_InvalidateIconCache()
                 end
                 UIDropDownMenu_AddButton(info, level)
             end
@@ -3652,7 +3758,7 @@ end
                 db3.stackColor = db3.stackColor or {}; db3.stackColor.r = nr; db3.stackColor.g = ng; db3.stackColor.b = nb
             end
             if f.stackColorSwatch and MSWA_KeyEquals(MSWA.selectedSpellID, keyAtOpen) then f.stackColorSwatch:SetColorTexture(nr, ng, nb, 1) end
-            if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+            MSWA_InvalidateIconCache()
         end
         if ColorPickerFrame and ColorPickerFrame.SetupColorPickerAndShow then
             local function OnChanged() local nr, ng, nb = ColorPickerFrame:GetColorRGB(); if type(nr) == "number" then ApplySC(nr, ng, nb) end end
@@ -3679,7 +3785,7 @@ end
             db.stackOffsetX = ox
             db.stackOffsetY = oy
         end
-        if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+        MSWA_InvalidateIconCache()
     end
     if f.stackOffXEdit then
         f.stackOffXEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyStackOffset() end)
@@ -4110,16 +4216,16 @@ end
     local function ClampTextSize(v) v = tonumber(v) or 12; if v < 6 then v = 6 end; if v > 48 then v = 48 end; return v end
     local function ApplyTextSize() local db = MSWA_GetDB(); local key = MSWA.selectedSpellID; local s = key and select(1, MSWA_GetOrCreateSpellSettings(db, key)) or nil
         local cur = (s and s.textFontSize) or db.textFontSize; local v = ClampTextSize(f.textSizeEdit and f.textSizeEdit:GetText() or cur)
-        if s then s.textFontSize = v else db.textFontSize = v end; if f.textSizeEdit then f.textSizeEdit:SetText(tostring(v)) end; if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+        if s then s.textFontSize = v else db.textFontSize = v end; if f.textSizeEdit then f.textSizeEdit:SetText(tostring(v)) end; MSWA_InvalidateIconCache()
     end
     HookBox(f.textSizeEdit, ApplyTextSize)
     f.textSizeMinus:SetScript("OnClick", function() local db = MSWA_GetDB(); local key = MSWA.selectedSpellID; local s = key and select(1, MSWA_GetOrCreateSpellSettings(db, key)) or nil
         local cur = (s and s.textFontSize) or db.textFontSize; local v = ClampTextSize((f.textSizeEdit and f.textSizeEdit:GetText()) or cur) - 1; v = ClampTextSize(v)
-        if s then s.textFontSize = v else db.textFontSize = v end; if f.textSizeEdit then f.textSizeEdit:SetText(tostring(v)) end; if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+        if s then s.textFontSize = v else db.textFontSize = v end; if f.textSizeEdit then f.textSizeEdit:SetText(tostring(v)) end; MSWA_InvalidateIconCache()
     end)
     f.textSizePlus:SetScript("OnClick", function() local db = MSWA_GetDB(); local key = MSWA.selectedSpellID; local s = key and select(1, MSWA_GetOrCreateSpellSettings(db, key)) or nil
         local cur = (s and s.textFontSize) or db.textFontSize; local v = ClampTextSize((f.textSizeEdit and f.textSizeEdit:GetText()) or cur) + 1; v = ClampTextSize(v)
-        if s then s.textFontSize = v else db.textFontSize = v end; if f.textSizeEdit then f.textSizeEdit:SetText(tostring(v)) end; if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+        if s then s.textFontSize = v else db.textFontSize = v end; if f.textSizeEdit then f.textSizeEdit:SetText(tostring(v)) end; MSWA_InvalidateIconCache()
     end)
 
     -- Text pos dropdown
@@ -4134,7 +4240,7 @@ end
                     else
                         db.textPoint = point
                     end
-                    UIDropDownMenu_SetText(f.textPosDrop, MSWA_GetTextPosLabel(point)); CloseDropDownMenus(); if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
+                    UIDropDownMenu_SetText(f.textPosDrop, MSWA_GetTextPosLabel(point)); CloseDropDownMenus(); MSWA_InvalidateIconCache()
                 end
                 UIDropDownMenu_AddButton(info, level)
             end
@@ -4150,7 +4256,7 @@ end
             if s3 then s3.textColor = s3.textColor or {}; s3.textColor.r = nr; s3.textColor.g = ng; s3.textColor.b = nb
             else db.textColor = db.textColor or {}; db.textColor.r = nr; db.textColor.g = ng; db.textColor.b = nb end
             if f.textColorSwatch and MSWA_KeyEquals(MSWA.selectedSpellID, keyAtOpen) then f.textColorSwatch:SetColorTexture(nr, ng, nb, 1) end
-            MSWA_RequestUpdateSpells()
+            MSWA_InvalidateIconCache()
         end
         if ColorPickerFrame and ColorPickerFrame.SetupColorPickerAndShow then
             local function OnChanged() local nr, ng, nb = ColorPickerFrame:GetColorRGB(); if type(nr) == "number" then Apply(nr, ng, nb) end end

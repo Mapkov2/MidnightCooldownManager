@@ -361,6 +361,19 @@ local function ApplyStyle(bd, s, db)
     bd.nameFS:SetFont(fp, fs, "OUTLINE")
     bd.timerFS:SetFont(fp, fs, "OUTLINE")
 
+    -- Stack font: stackFontKey -> fontKey -> DEFAULT, stackFontSize -> 10
+    if bd.stackFS then
+        local sfk = (s and s.stackFontKey) or (db and db.stackFontKey) or (db and db.fontKey) or "DEFAULT"
+        local sfp = MSWA_GetFontPathFromKey and MSWA_GetFontPathFromKey(sfk) or fp
+        local sfs = tonumber(s and s.stackFontSize) or tonumber(db and db.stackFontSize) or 10
+        if sfs < 6 then sfs = 6 elseif sfs > 48 then sfs = 48 end
+        bd.stackFS:SetFont(sfp, sfs, "OUTLINE")
+        local sc = (s and s.stackColor) or (db and db.stackColor)
+        if sc then
+            bd.stackFS:SetTextColor(tonumber(sc.r) or 1, tonumber(sc.g) or 0.82, tonumber(sc.b) or 0, 1)
+        end
+    end
+
     -- Text color: same chain as icon system (textColor per-aura -> global)
     local tc = (s and s.textColor) or (db and db.textColor)
     local tr, tg, tb = 1, 1, 1

@@ -290,6 +290,10 @@ local function ComputeAlpha(s, isOnCD, inCombat)
     if isOnCD then
         local cda = s and tonumber(s.cdAlpha)
         if cda then alpha = alpha * cda end
+    else
+        -- Gamz: "When Ready" alpha (0% = hidden when spell available, 100% when on CD)
+        local ra = s and tonumber(s.readyAlpha)
+        if ra then alpha = alpha * ra end
     end
     return alpha
 end
@@ -1715,6 +1719,18 @@ local function MSWA_UpdateSpells()
                     -- Bars need timer tick for smooth animation
                     if bInfo.isActive ~= false and (bInfo.duration or 0) > 0 then
                         foundNeedsTimerTick = true
+                    end
+
+                    -- Item count stacks for bar display
+                    if not bInfo.stacks and GetItemCount then
+                        local iid = tonumber(bkey) == nil and tostring(bkey):match("^item:(%d+)")
+                        iid = iid and tonumber(iid)
+                        if iid then
+                            local cnt = GetItemCount(iid, false, false)
+                            if type(cnt) == "number" and cnt > 0 then
+                                bInfo.stacks = tostring(cnt)
+                            end
+                        end
                     end
 
                     MSWA_UpdateBarDisplay(btn, bs, db, bInfo)

@@ -162,6 +162,7 @@ function MSWA_CreateGroup(name)
         anchorFrame = nil, -- global frame name (string) or nil => MSWA.frame
         point      = "CENTER",
         relPoint   = "CENTER",
+        growthDirection = "RIGHT",  -- RIGHT / LEFT / UP / DOWN
     }
     tinsert(db.groupOrder, gid)
     return gid
@@ -240,8 +241,21 @@ function MSWA_SetAuraGroup(key, gid)
         local count = (idx - 1)
         local group = db.groups[gid]
         local size = group.size or MSWA.ICON_SIZE
-        s.x = count * (size + MSWA.ICON_SPACE)
-        s.y = 0
+        local step = size + MSWA.ICON_SPACE
+        local dir = group.growthDirection or "RIGHT"
+        if dir == "LEFT" then
+            s.x = -(count * step)
+            s.y = 0
+        elseif dir == "UP" then
+            s.x = 0
+            s.y = count * step
+        elseif dir == "DOWN" then
+            s.x = 0
+            s.y = -(count * step)
+        else -- RIGHT (default)
+            s.x = count * step
+            s.y = 0
+        end
         s.width  = s.width  or size
         s.height = s.height or size
         db.auraGroups[key] = gid

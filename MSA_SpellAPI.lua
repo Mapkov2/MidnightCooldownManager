@@ -55,6 +55,14 @@ end
 local fontPathCache = {}
 local defaultFontPath
 
+-- Built-in font keys -> paths (matches MSWA_RebuildFontChoices in MSA_Icons)
+local BUILTIN_FONT_PATHS = {
+    FRIZQT   = "Fonts\\FRIZQT__.TTF",
+    ARIALN   = "Fonts\\ARIALN.TTF",
+    MORPHEUS = "Fonts\\MORPHEUS.TTF",
+    SKURRI   = "Fonts\\SKURRI.TTF",
+}
+
 local function GetDefaultFontPath()
     if not defaultFontPath then
         if GameFontNormal and GameFontNormal.GetFont then
@@ -73,13 +81,32 @@ function MSWA_GetFontPathFromKey(fontKey)
     local cached = fontPathCache[fontKey]
     if cached then return cached end
 
-    -- One-time lookup via SharedMedia (pcall only here, cached forever)
+    -- Built-in font keys (FRIZQT, ARIALN, MORPHEUS, SKURRI)
+    local builtin = BUILTIN_FONT_PATHS[fontKey]
+    if builtin then
+        fontPathCache[fontKey] = builtin
+        return builtin
+    end
+
+    -- SharedMedia lookup (pcall only here, cached forever)
     local LSM = MSWA.LSM
     if LSM and LSM.Fetch then
         local ok, path = pcall(LSM.Fetch, LSM, "font", fontKey)
         if ok and path then
             fontPathCache[fontKey] = path
             return path
+        end
+    end
+
+    -- Last resort: check MSWA.fontChoices (covers any future additions)
+    local choices = MSWA.fontChoices
+    if choices then
+        for i = 1, #choices do
+            local c = choices[i]
+            if c.key == fontKey and c.path then
+                fontPathCache[fontKey] = c.path
+                return c.path
+            end
         end
     end
 
