@@ -4091,26 +4091,62 @@ end
 
     -- ======= Sound Effects Section =======
     local sndSep = dp:CreateTexture(nil, "ARTWORK")
-    sndSep:SetPoint("TOPLEFT", f.tc2ValueLabel, "BOTTOMLEFT", -40, -14)
+    sndSep:SetPoint("TOPLEFT", f.tc2ColorLabel, "BOTTOMLEFT", 0, -14)
     sndSep:SetSize(400, 1); sndSep:SetColorTexture(1, 1, 1, 0.12)
 
     local sndTitle = dp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     sndTitle:SetPoint("TOPLEFT", sndSep, "BOTTOMLEFT", 0, -6)
     sndTitle:SetText("|cffffcc00Sound Effects|r")
 
-    -- Sound on Cooldown Start
-    f.sndStartLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.sndStartLabel:SetPoint("TOPLEFT", sndTitle, "BOTTOMLEFT", 0, -10)
-    f.sndStartLabel:SetText("On CD Start:")
+    -- Shared layout constants for aligned rows
+    local SND_LABEL_W   = 80     -- fixed label column width
+    local SND_DROP_W    = 155    -- dropdown width
+    local SND_ROW_H     = 26    -- row height
+    local SND_LABEL_X   = 0     -- label indent from title
+    local SND_DROP_XOFF = -12   -- dropdown template offset fix
 
-    f.sndStartDrop = CreateFrame("Frame", "MSWA_SndStartDD", dp, "UIDropDownMenuTemplate")
-    f.sndStartDrop:SetPoint("LEFT", f.sndStartLabel, "RIGHT", -10, -3)
-    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.sndStartDrop, 150) end
+    -- Helper: create one sound row (label + dropdown + optional preview btn)
+    local function CreateSoundRow(parent, labelText, anchorFrame, yOff, globalName, showPreview)
+        -- Row container
+        local row = CreateFrame("Frame", nil, parent)
+        row:SetHeight(SND_ROW_H)
+        row:SetPoint("TOPLEFT", anchorFrame, "BOTTOMLEFT", 0, yOff)
+        row:SetPoint("RIGHT", parent, "RIGHT", -10, 0)
 
-    f.sndStartPreview = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate")
-    f.sndStartPreview:SetSize(20, 20)
-    f.sndStartPreview:SetPoint("LEFT", f.sndStartDrop, "RIGHT", -8, 0)
-    f.sndStartPreview:SetText(">")
+        -- Label (fixed width, right-justified so colons align)
+        local lbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        lbl:SetPoint("LEFT", row, "LEFT", SND_LABEL_X, 0)
+        lbl:SetWidth(SND_LABEL_W)
+        lbl:SetJustifyH("RIGHT")
+        lbl:SetText(labelText)
+
+        -- Dropdown (aligned to fixed column)
+        local drop = CreateFrame("Frame", globalName, row, "UIDropDownMenuTemplate")
+        drop:SetPoint("LEFT", lbl, "RIGHT", SND_DROP_XOFF, -2)
+        if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(drop, SND_DROP_W) end
+
+        -- Preview button
+        local preview = nil
+        if showPreview then
+            preview = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+            preview:SetSize(22, 22)
+            preview:SetPoint("LEFT", drop, "RIGHT", -6, 2)
+            preview:SetText("\124TInterface\\Buttons\\UI-SpellbookIcon-NextPage-Up:14:14:0:0\124t")
+            preview:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Preview Sound", 1, 1, 1)
+                GameTooltip:Show()
+            end)
+            preview:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        end
+
+        return row, lbl, drop, preview
+    end
+
+    -- Row 1: On CD Start
+    local sndRow1, _, f_sndStartDrop, f_sndStartPreview = CreateSoundRow(dp, "On CD Start:", sndTitle, -4, "MSWA_SndStartDD", true)
+    f.sndStartDrop    = f_sndStartDrop
+    f.sndStartPreview = f_sndStartPreview
     f.sndStartPreview:SetScript("OnClick", function()
         local key = MSWA.selectedSpellID; if not key then return end
         local db2 = MSWA_GetDB()
@@ -4119,19 +4155,10 @@ end
         if sndKey then MSWA_PlaySound(sndKey, ss.soundChannel) end
     end)
 
-    -- Sound on Ready
-    f.sndReadyLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.sndReadyLabel:SetPoint("TOPLEFT", f.sndStartLabel, "BOTTOMLEFT", 0, -26)
-    f.sndReadyLabel:SetText("On Ready:")
-
-    f.sndReadyDrop = CreateFrame("Frame", "MSWA_SndReadyDD", dp, "UIDropDownMenuTemplate")
-    f.sndReadyDrop:SetPoint("LEFT", f.sndReadyLabel, "RIGHT", -10, -3)
-    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.sndReadyDrop, 150) end
-
-    f.sndReadyPreview = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate")
-    f.sndReadyPreview:SetSize(20, 20)
-    f.sndReadyPreview:SetPoint("LEFT", f.sndReadyDrop, "RIGHT", -8, 0)
-    f.sndReadyPreview:SetText(">")
+    -- Row 2: On Ready
+    local sndRow2, _, f_sndReadyDrop, f_sndReadyPreview = CreateSoundRow(dp, "On Ready:", sndRow1, -2, "MSWA_SndReadyDD", true)
+    f.sndReadyDrop    = f_sndReadyDrop
+    f.sndReadyPreview = f_sndReadyPreview
     f.sndReadyPreview:SetScript("OnClick", function()
         local key = MSWA.selectedSpellID; if not key then return end
         local db2 = MSWA_GetDB()
@@ -4140,17 +4167,12 @@ end
         if sndKey then MSWA_PlaySound(sndKey, ss.soundChannel) end
     end)
 
-    -- Sound Channel
-    f.sndChannelLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.sndChannelLabel:SetPoint("TOPLEFT", f.sndReadyLabel, "BOTTOMLEFT", 0, -26)
-    f.sndChannelLabel:SetText("Channel:")
-
-    f.sndChannelDrop = CreateFrame("Frame", "MSWA_SndChannelDD", dp, "UIDropDownMenuTemplate")
-    f.sndChannelDrop:SetPoint("LEFT", f.sndChannelLabel, "RIGHT", -10, -3)
-    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.sndChannelDrop, 150) end
+    -- Row 3: Channel (no preview)
+    local sndRow3, _, f_sndChannelDrop = CreateSoundRow(dp, "Channel:", sndRow2, -2, "MSWA_SndChannelDD", false)
+    f.sndChannelDrop = f_sndChannelDrop
 
     -- Initialize sound dropdowns
-    local function InitSoundDropdown(drop, settingsKey, previewBtn)
+    local function InitSoundDropdown(drop, settingsKey)
         UIDropDownMenu_Initialize(drop, function(self, level)
             if not level then return end
             local choices = MSWA_GetSoundChoices()
@@ -4178,8 +4200,8 @@ end
             end
         end)
     end
-    InitSoundDropdown(f.sndStartDrop, "soundOnStart", f.sndStartPreview)
-    InitSoundDropdown(f.sndReadyDrop, "soundOnReady", f.sndReadyPreview)
+    InitSoundDropdown(f.sndStartDrop, "soundOnStart")
+    InitSoundDropdown(f.sndReadyDrop, "soundOnReady")
 
     -- Channel dropdown init
     UIDropDownMenu_Initialize(f.sndChannelDrop, function(self, level)

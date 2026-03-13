@@ -151,26 +151,29 @@ local _issv = _G.issecretvalue
 
 -- Query actual CD duration for a key (spell or item).
 -- Called ONLY on transitions (rare path), not per-frame.
+-- Uses existing key helpers to resolve all key formats:
+--   number (plain spellID), "spell:ID:N", "item:ID", "item:ID:N"
 local function GetKeyDuration(key)
-    if type(key) == "number" then
-        -- Spell ID
+    -- Spell (plain number or "spell:ID:N" instance key)
+    local spellID = MSWA_KeyToSpellID(key)
+    if spellID then
         if C_Spell and C_Spell.GetSpellCooldown then
-            local info = C_Spell.GetSpellCooldown(key)
+            local info = C_Spell.GetSpellCooldown(spellID)
             return info and info.duration
         end
-    elseif type(key) == "string" then
-        -- Item key: "item:ID" or "item:ID:N"
-        local itemID = tonumber(key:match("^item:(%d+)"))
-        if itemID and GetItemCooldown then
-            local _, dur = GetItemCooldown(itemID)
-            return dur
-        end
+        return nil
+    end
+    -- Item ("item:ID" or "item:ID:N")
+    local itemID = MSWA_KeyToItemID(key)
+    if itemID and GetItemCooldown then
+        local _, dur = GetItemCooldown(itemID)
+        return dur
     end
     return nil
 end
 
 -- Returns true if duration represents a real cooldown (not GCD).
--- Secret values are trusted as real CDs.
+-- Secret values are trusted as real CDs (Midnight 12.0 taints real data).
 local function IsRealCooldown(duration)
     if not duration then return false end
     if _issv and _issv(duration) then return true end
@@ -195,20 +198,24 @@ function MSWA_CheckSoundTransition(key, onCD, s)
 
     if nowCD == prev then return end -- no transition
 
-    _soundState[key] = nowCD
-
     if nowCD and not prev then
-        -- OFF -> ON: verify this is a real CD (not just GCD)
-        if hasStart then
-            local dur = GetKeyDuration(key)
-            if IsRealCooldown(dur) then
+        -- OFF -> ON: check if this is a real CD or just GCD
+        local dur = GetKeyDuration(key)
+        if IsRealCooldown(dur) then
+            -- Real cooldown confirmed: commit state + play sound
+            _soundState[key] = true
+            if hasStart then
                 MSWA_PlaySound(s.soundOnStart, s.soundChannel)
             end
         end
-    elseif prev and not nowCD then
-        -- ON -> OFF: spell ready (no GCD filter needed,
-        -- GCD ON-transitions are suppressed above so state
-        -- stays false during GCD -> no false "ready" trigger)
+        -- GCD: do NOT update state (stays false).
+        -- Next tick will re-check with the real CD duration.
+        return
+    end
+
+    if prev and not nowCD then
+        -- ON -> OFF: spell ready
+        _soundState[key] = false
         if hasReady then
             MSWA_PlaySound(s.soundOnReady, s.soundChannel)
         end
