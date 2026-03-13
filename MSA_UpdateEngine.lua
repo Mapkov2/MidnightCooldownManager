@@ -465,6 +465,7 @@ local function MSWA_UpdateSpells()
 
                                 local onCD = MSWA_IsCooldownActive(btn)
                                 if onCD then foundCooldownActive = true end
+                                MSWA_CheckSoundTransition(key, onCD, s)
 
                                 if onCD then
                                     if s.grayOnCooldown then
@@ -759,6 +760,7 @@ local function MSWA_UpdateSpells()
 
                             local onCD = MSWA_IsCooldownActive(btn)
                             if onCD then foundCooldownActive = true end
+                            MSWA_CheckSoundTransition(key, onCD, s)
 
                             if s and s.grayOnCooldown then
                                 btn.icon:SetDesaturated(onCD)
@@ -917,6 +919,7 @@ local function MSWA_UpdateSpells()
 
                                 local onCD = MSWA_IsCooldownActive(btn)
                                 if onCD then foundCooldownActive = true end
+                                MSWA_CheckSoundTransition(key, onCD, s)
 
                                 if onCD then
                                     if s.grayOnCooldown then
@@ -1122,6 +1125,7 @@ local function MSWA_UpdateSpells()
 
                             local onCD = MSWA_IsCooldownActive(btn)
                             if onCD then foundCooldownActive = true end
+                            MSWA_CheckSoundTransition(key, onCD, s)
 
                             if s and s.grayOnCooldown then
                                 btn.icon:SetDesaturated(onCD)
@@ -1301,6 +1305,7 @@ local function MSWA_UpdateSpells()
 
                         local onCD = MSWA_IsCooldownActive(btn)
                         if onCD then foundCooldownActive = true end
+                        MSWA_CheckSoundTransition(key, onCD, s)
 
                         if onCD then
                             if s.grayOnCooldown then
@@ -1507,6 +1512,7 @@ local function MSWA_UpdateSpells()
 
                     local onCD = MSWA_IsCooldownActive(btn)
                     if onCD then foundCooldownActive = true end
+                    MSWA_CheckSoundTransition(key, onCD, s)
 
                     if s and s.grayOnCooldown then
                         btn.icon:SetDesaturated(onCD)

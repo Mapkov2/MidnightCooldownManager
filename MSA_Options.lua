@@ -534,6 +534,35 @@ MSWA_UpdateDetailPanel = function()
         f.showDecimalCheck:SetChecked((s and s.showDecimal) and true or false)
     end
 
+    -- Sync Sound dropdowns
+    if f.sndStartDrop and UIDropDownMenu_SetText then
+        local sk = (s and s.soundOnStart) or "NONE"
+        local label = "-- None --"
+        for _, entry in ipairs(MSWA_GetSoundChoices()) do
+            if entry.key == sk then label = entry.label; break end
+        end
+        UIDropDownMenu_SetSelectedValue(f.sndStartDrop, sk)
+        UIDropDownMenu_SetText(f.sndStartDrop, label)
+    end
+    if f.sndReadyDrop and UIDropDownMenu_SetText then
+        local sk = (s and s.soundOnReady) or "NONE"
+        local label = "-- None --"
+        for _, entry in ipairs(MSWA_GetSoundChoices()) do
+            if entry.key == sk then label = entry.label; break end
+        end
+        UIDropDownMenu_SetSelectedValue(f.sndReadyDrop, sk)
+        UIDropDownMenu_SetText(f.sndReadyDrop, label)
+    end
+    if f.sndChannelDrop and UIDropDownMenu_SetText then
+        local ch = (s and s.soundChannel) or "Master"
+        local label = "Master"
+        for _, entry in ipairs(MSWA_GetSoundChannels()) do
+            if entry.key == ch then label = entry.label; break end
+        end
+        UIDropDownMenu_SetSelectedValue(f.sndChannelDrop, ch)
+        UIDropDownMenu_SetText(f.sndChannelDrop, label)
+    end
+
     -- Sync Display Type dropdown + bar settings
     if f.displayTypeDrop then
         local dt = (s and s.displayType == "BAR") and "BAR" or "ICON"
@@ -4060,8 +4089,123 @@ end
     f.tc2ValueLabel:SetPoint("LEFT", f.tc2ValueEdit, "RIGHT", 4, 0)
     f.tc2ValueLabel:SetText("sec")
 
+    -- ======= Sound Effects Section =======
+    local sndSep = dp:CreateTexture(nil, "ARTWORK")
+    sndSep:SetPoint("TOPLEFT", f.tc2ValueLabel, "BOTTOMLEFT", -40, -14)
+    sndSep:SetSize(400, 1); sndSep:SetColorTexture(1, 1, 1, 0.12)
+
+    local sndTitle = dp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    sndTitle:SetPoint("TOPLEFT", sndSep, "BOTTOMLEFT", 0, -6)
+    sndTitle:SetText("|cffffcc00Sound Effects|r")
+
+    -- Sound on Cooldown Start
+    f.sndStartLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.sndStartLabel:SetPoint("TOPLEFT", sndTitle, "BOTTOMLEFT", 0, -10)
+    f.sndStartLabel:SetText("On CD Start:")
+
+    f.sndStartDrop = CreateFrame("Frame", "MSWA_SndStartDD", dp, "UIDropDownMenuTemplate")
+    f.sndStartDrop:SetPoint("LEFT", f.sndStartLabel, "RIGHT", -10, -3)
+    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.sndStartDrop, 150) end
+
+    f.sndStartPreview = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate")
+    f.sndStartPreview:SetSize(20, 20)
+    f.sndStartPreview:SetPoint("LEFT", f.sndStartDrop, "RIGHT", -8, 0)
+    f.sndStartPreview:SetText(">")
+    f.sndStartPreview:SetScript("OnClick", function()
+        local key = MSWA.selectedSpellID; if not key then return end
+        local db2 = MSWA_GetDB()
+        local ss = (db2.spellSettings or {})[key] or (db2.spellSettings or {})[tostring(key)]
+        local sndKey = ss and ss.soundOnStart
+        if sndKey then MSWA_PlaySound(sndKey, ss.soundChannel) end
+    end)
+
+    -- Sound on Ready
+    f.sndReadyLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.sndReadyLabel:SetPoint("TOPLEFT", f.sndStartLabel, "BOTTOMLEFT", 0, -26)
+    f.sndReadyLabel:SetText("On Ready:")
+
+    f.sndReadyDrop = CreateFrame("Frame", "MSWA_SndReadyDD", dp, "UIDropDownMenuTemplate")
+    f.sndReadyDrop:SetPoint("LEFT", f.sndReadyLabel, "RIGHT", -10, -3)
+    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.sndReadyDrop, 150) end
+
+    f.sndReadyPreview = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate")
+    f.sndReadyPreview:SetSize(20, 20)
+    f.sndReadyPreview:SetPoint("LEFT", f.sndReadyDrop, "RIGHT", -8, 0)
+    f.sndReadyPreview:SetText(">")
+    f.sndReadyPreview:SetScript("OnClick", function()
+        local key = MSWA.selectedSpellID; if not key then return end
+        local db2 = MSWA_GetDB()
+        local ss = (db2.spellSettings or {})[key] or (db2.spellSettings or {})[tostring(key)]
+        local sndKey = ss and ss.soundOnReady
+        if sndKey then MSWA_PlaySound(sndKey, ss.soundChannel) end
+    end)
+
+    -- Sound Channel
+    f.sndChannelLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.sndChannelLabel:SetPoint("TOPLEFT", f.sndReadyLabel, "BOTTOMLEFT", 0, -26)
+    f.sndChannelLabel:SetText("Channel:")
+
+    f.sndChannelDrop = CreateFrame("Frame", "MSWA_SndChannelDD", dp, "UIDropDownMenuTemplate")
+    f.sndChannelDrop:SetPoint("LEFT", f.sndChannelLabel, "RIGHT", -10, -3)
+    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.sndChannelDrop, 150) end
+
+    -- Initialize sound dropdowns
+    local function InitSoundDropdown(drop, settingsKey, previewBtn)
+        UIDropDownMenu_Initialize(drop, function(self, level)
+            if not level then return end
+            local choices = MSWA_GetSoundChoices()
+            local key = MSWA.selectedSpellID
+            local db2 = MSWA_GetDB()
+            local ss = key and ((db2.spellSettings or {})[key] or (db2.spellSettings or {})[tostring(key)]) or nil
+            local curKey = (ss and ss[settingsKey]) or "NONE"
+            for _, entry in ipairs(choices) do
+                local info = UIDropDownMenu_CreateInfo()
+                info.text = entry.label; info.value = entry.key
+                info.checked = (entry.key == curKey)
+                info.func = function()
+                    local k2 = MSWA.selectedSpellID; if not k2 then return end
+                    local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), k2))
+                    s2[settingsKey] = (entry.key == "NONE") and nil or entry.key
+                    UIDropDownMenu_SetSelectedValue(drop, entry.key)
+                    UIDropDownMenu_SetText(drop, entry.label)
+                    -- Preview: play selected sound immediately
+                    if entry.key ~= "NONE" then
+                        local ch = s2.soundChannel or "Master"
+                        MSWA_PlaySound(entry.key, ch)
+                    end
+                end
+                UIDropDownMenu_AddButton(info, level)
+            end
+        end)
+    end
+    InitSoundDropdown(f.sndStartDrop, "soundOnStart", f.sndStartPreview)
+    InitSoundDropdown(f.sndReadyDrop, "soundOnReady", f.sndReadyPreview)
+
+    -- Channel dropdown init
+    UIDropDownMenu_Initialize(f.sndChannelDrop, function(self, level)
+        if not level then return end
+        local channels = MSWA_GetSoundChannels()
+        local key = MSWA.selectedSpellID
+        local db2 = MSWA_GetDB()
+        local ss = key and ((db2.spellSettings or {})[key] or (db2.spellSettings or {})[tostring(key)]) or nil
+        local curCh = (ss and ss.soundChannel) or "Master"
+        for _, ch in ipairs(channels) do
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = ch.label; info.value = ch.key
+            info.checked = (ch.key == curCh)
+            info.func = function()
+                local k2 = MSWA.selectedSpellID; if not k2 then return end
+                local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), k2))
+                s2.soundChannel = (ch.key == "Master") and nil or ch.key
+                UIDropDownMenu_SetSelectedValue(f.sndChannelDrop, ch.key)
+                UIDropDownMenu_SetText(f.sndChannelDrop, ch.label)
+            end
+            UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+
     -- Set scroll child height (covers all content so scrollbar appears when needed)
-    dp:SetHeight(1050)
+    dp:SetHeight(1200)
 
     -- Helper: update condition button text
     local function UpdateTC2CondText(cond)

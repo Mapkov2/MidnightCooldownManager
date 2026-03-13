@@ -19,6 +19,7 @@ MSA_Anchors.lua
 MSA_Icons.lua
 MSA_Glow.lua
 MSA_Bars.lua
+MSA_Sound.lua
 MSA_UpdateEngine.lua
 MSA_ExportImport.lua
 MSA_Options.lua
