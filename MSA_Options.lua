@@ -408,7 +408,6 @@ MSWA_UpdateDetailPanel = function()
         local db = MSWA_GetDB(); local g = (db.groups or {})[gid]
         if not g then MSWA.selectedGroupID = nil
         else
-            if f.rightTitle then f.rightTitle:SetText(g.name or "Group") end
             if f.groupPanel then f.groupPanel:Show(); if f.groupPanel.Sync then f.groupPanel:Sync() end end
             if _pageHost then _pageHost:Hide() end
             if f.navRail then f.navRail:Hide() end
@@ -419,7 +418,6 @@ MSWA_UpdateDetailPanel = function()
 
     -- Nothing selected
     if not key then
-        if f.rightTitle then f.rightTitle:SetText("Select an Aura") end
         if f.groupPanel then f.groupPanel:Hide() end
         if _pageHost then _pageHost:Hide() end
         if f.navRail then f.navRail:Hide() end
@@ -428,8 +426,6 @@ MSWA_UpdateDetailPanel = function()
     end
 
     -- Aura selected
-    local name = MSWA_GetDisplayNameForKey(key)
-    if f.rightTitle then f.rightTitle:SetText(name or "Selected Aura") end
     if f.groupPanel then f.groupPanel:Hide() end
     if f.emptyPanel then f.emptyPanel:Hide() end
     if f.navRail then f.navRail:Show() end
@@ -503,11 +499,101 @@ local function BuildTriggerPage(host)
     local f = W.ScrollPage(host)
     local c = f._content
 
-    W.Title(c, "Trigger", 12, -10)
-    W.MutedLabel(c, "Aura mode, spell/item binding, anchor frame.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+    -- Dynamic aura name title (updated in Refresh)
+    local pageTitle = c:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    pageTitle:SetPoint("TOPLEFT", c, "TOPLEFT", 12, -10); pageTitle:SetText(""); W.SkinTitle(pageTitle)
+    local pageSub = c:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    pageSub:SetPoint("TOPLEFT", pageTitle, "BOTTOMLEFT", 0, -3); pageSub:SetText(""); W.SkinMuted(pageSub)
 
-    -- Aura Mode Cards (2x3 grid)
-    local modeHeader = W.SectionHeader(c, "Aura Mode", nil, -54)
+    -- ── Add ID / Drop Zone (visible for drafts + always at top) ──
+    local addLabel = W.Label(c, "Add ID:", "TOPLEFT", pageSub, "BOTTOMLEFT", 0, -10)
+    local addEdit = W.EditBox(c, 80, 22, true)
+    addEdit:SetPoint("LEFT", addLabel, "RIGHT", 8, 0)
+    local addBtn = W.Button(c, "Add", 50, 22)
+    addBtn:SetPoint("LEFT", addEdit, "RIGHT", 6, 0)
+
+    -- Drop Zone
+    local dropZone = CreateFrame("Button", nil, c)
+    dropZone:SetSize(320, 36)
+    dropZone:SetPoint("TOPLEFT", addLabel, "BOTTOMLEFT", 0, -6)
+    dropZone.bg = dropZone:CreateTexture(nil, "BACKGROUND")
+    dropZone.bg:SetAllPoints(); dropZone.bg:SetColorTexture(0.06, 0.08, 0.14, 0.7)
+    dropZone.border = CreateFrame("Frame", nil, dropZone, "BackdropTemplate")
+    dropZone.border:SetAllPoints()
+    dropZone.border:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    dropZone.border:SetBackdropBorderColor(T.edgeR, T.edgeG, T.edgeB, 0.6)
+    dropZone.icon = dropZone:CreateTexture(nil, "ARTWORK")
+    dropZone.icon:SetSize(20, 20); dropZone.icon:SetPoint("LEFT", 8, 0)
+    dropZone.icon:SetTexture("Interface\\CURSOR\\openhandglow"); dropZone.icon:SetDesaturated(true); dropZone.icon:SetVertexColor(0.6, 0.6, 0.6)
+    dropZone.label = dropZone:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    dropZone.label:SetPoint("LEFT", dropZone.icon, "RIGHT", 8, 0); dropZone.label:SetText("Drop Spell or Item here"); W.SkinMuted(dropZone.label)
+
+    -- AddFromUI logic
+    local function AddFromUI()
+        local text = addEdit:GetText(); local id = tonumber(text); if not id then return end
+        local db = MSWA_GetDB(); db.trackedItems = db.trackedItems or {}; db.trackedSpells = db.trackedSpells or {}
+        local newKey
+        local name = MSWA_GetSpellName and MSWA_GetSpellName(id) or nil
+        if name then
+            if db.trackedSpells[id] then newKey = MSWA_NewSpellInstanceKey(id); db.trackedSpells[newKey] = true
+            else db.trackedSpells[id] = true; newKey = id end
+        else
+            if db.trackedItems[id] then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true
+            else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end
+        end
+        -- Replace draft key if one is selected
+        local oldKey = MSWA.selectedSpellID
+        if oldKey and MSWA_IsDraftKey(oldKey) and newKey then
+            db.spellSettings = db.spellSettings or {}
+            local s = db.spellSettings[oldKey]
+            if s then db.spellSettings[oldKey] = nil; if not db.spellSettings[newKey] then db.spellSettings[newKey] = s end end
+            if db.auraGroups and db.auraGroups[oldKey] then if not db.auraGroups[newKey] then db.auraGroups[newKey] = db.auraGroups[oldKey] end; db.auraGroups[oldKey] = nil end
+            if db.customNames and db.customNames[oldKey] then if not db.customNames[newKey] then db.customNames[newKey] = db.customNames[oldKey] end; db.customNames[oldKey] = nil end
+            db.trackedSpells[oldKey] = nil
+        end
+        MSWA.selectedSpellID = newKey; addEdit:SetText(""); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
+    end
+    addBtn:SetScript("OnClick", AddFromUI)
+    addEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); AddFromUI() end)
+
+    -- Drop zone: receive spell/item from cursor
+    local function HandleCursorDrop()
+        if not GetCursorInfo then return false end
+        local cursorType, id, info, extra = GetCursorInfo()
+        if not cursorType then return false end
+        local numericID
+        if cursorType == "spell" then
+            -- Resolve spell ID (extra = spellID in 12.0)
+            local data
+            if extra then data = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(extra) end
+            if not data and id then data = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(id) end
+            if not data or not data.spellID then ClearCursor(); return false end
+            numericID = data.spellID
+        elseif cursorType == "item" then
+            numericID = tonumber(id)
+            if not numericID and type(info) == "string" then local p = info:match("item:(%d+)"); numericID = p and tonumber(p) end
+            if not numericID then ClearCursor(); return false end
+        else ClearCursor(); return false end
+        addEdit:SetText(tostring(numericID)); ClearCursor(); AddFromUI(); return true
+    end
+    addEdit:SetScript("OnReceiveDrag", function() HandleCursorDrop() end)
+    dropZone:SetScript("OnReceiveDrag", function() HandleCursorDrop() end)
+    dropZone:SetScript("OnClick", function(self, button) if button == "LeftButton" and GetCursorInfo and GetCursorInfo() then HandleCursorDrop() end end)
+    dropZone:RegisterForClicks("LeftButtonUp")
+    dropZone:SetScript("OnEnter", function(self)
+        local hasCursor = GetCursorInfo and GetCursorInfo()
+        if hasCursor then self.bg:SetColorTexture(0.10, 0.20, 0.10, 0.8); self.label:SetText("|cff44ff44Release to add|r")
+        else self.bg:SetColorTexture(0.08, 0.10, 0.16, 0.8) end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:AddLine("Drag & Drop", 1, 0.82, 0)
+        GameTooltip:AddLine("Drag a spell or item here to add it.", 1, 1, 1); GameTooltip:Show()
+    end)
+    dropZone:SetScript("OnLeave", function(self)
+        self.bg:SetColorTexture(0.06, 0.08, 0.14, 0.7); self.label:SetText("Drop Spell or Item here"); W.SkinMuted(self.label)
+        GameTooltip:Hide()
+    end)
+
+    -- ── Aura Mode Cards (2x3 grid) ──
+    local modeHeader = W.SectionHeader(c, "Aura Mode", dropZone, -12)
     local MODES = {
         { key = nil,              label = "Cooldown",    desc = "Standard CD tracker" },
         { key = "AUTOBUFF",       label = "Auto Buff",   desc = "Show while buff active" },
@@ -525,7 +611,6 @@ local function BuildTriggerPage(host)
             local oldMode = s.auraMode
             s.auraMode = m.key
             if MSWA._autoBuff then MSWA._autoBuff[key] = nil end
-            -- Mode-specific init
             if m.key == "AUTOBUFF" or m.key == "BUFF_THEN_CD" then
                 if not s.autoBuffDuration then s.autoBuffDuration = 10 end
             elseif m.key == "REMINDER_BUFF" then
@@ -546,7 +631,6 @@ local function BuildTriggerPage(host)
                 local sid = MSWA_KeyToSpellID(key) or MSWA_KeyToItemID(key)
                 if sid then s.auraSpellID = sid; if MSWA_RegisterBuffWatch then MSWA_RegisterBuffWatch(tostring(key), sid, s.auraUnit or "player") end end
             end
-            -- Unregister buff watch for non-BUFF_AURA modes
             if m.key ~= "BUFF_AURA" and MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
             if not m.key and MSWA._charges then MSWA._charges[key] = nil end
             MSWA_UpdateDetailPanel(); MSWA_RequestUpdateSpells()
@@ -557,10 +641,10 @@ local function BuildTriggerPage(host)
         modeCards[i] = card
     end
 
-    -- Mode sub-settings (show/hide per mode)
-    local subAnchor = modeCards[5] -- anchor below row 3
+    -- Last mode card row bottom = anchor for sub-settings
+    local subAnchor = modeCards[5]
 
-    -- Buff Duration
+    -- Mode sub-settings (all initially hidden, shown per mode in Refresh)
     local buffDurLabel = W.Label(c, "Buff duration (sec):", "TOPLEFT", subAnchor, "BOTTOMLEFT", 0, -14)
     local buffDurEdit = W.EditBox(c, 70, 22)
     buffDurEdit:SetPoint("LEFT", buffDurLabel, "RIGHT", 8, 0)
@@ -570,7 +654,6 @@ local function BuildTriggerPage(host)
         if MSWA._autoBuff then MSWA._autoBuff[key] = nil end; MSWA_RequestUpdateSpells()
     end)
 
-    -- Buff Delay
     local buffDelayLabel = W.Label(c, "Timer restart after (sec):", "TOPLEFT", buffDurLabel, "BOTTOMLEFT", 0, -6)
     local buffDelayEdit = W.EditBox(c, 70, 22)
     buffDelayEdit:SetPoint("LEFT", buffDelayLabel, "RIGHT", 8, 0)
@@ -581,14 +664,12 @@ local function BuildTriggerPage(host)
         if MSWA._autoBuff then MSWA._autoBuff[key] = nil end; MSWA_RequestUpdateSpells()
     end)
 
-    -- Haste Scaling
     local hasteCheck = W.Checkbox(c, "Haste scaling (duration adjusts to spell haste)", nil, function(v)
         local s = EnsureSel(); if s then s.hasteScaling = v and true or nil end
         local key = GetSelKey(); if key and MSWA._autoBuff then MSWA._autoBuff[key] = nil end; MSWA_RequestUpdateSpells()
     end)
     hasteCheck:SetPoint("TOPLEFT", buffDelayLabel, "BOTTOMLEFT", 0, -8)
 
-    -- Reminder sub-settings
     local reminderTextLabel = W.Label(c, "Reminder text:", "TOPLEFT", hasteCheck, "BOTTOMLEFT", 0, -10)
     local reminderTextEdit = W.EditBox(c, 140, 22)
     reminderTextEdit:SetPoint("LEFT", reminderTextLabel, "RIGHT", 8, 0)
@@ -597,23 +678,19 @@ local function BuildTriggerPage(host)
         MSWA_InvalidateIconCache()
     end)
 
-    -- Buff Aura sub-settings
     local baAbsentCheck = W.Checkbox(c, "Show when absent (dimmed)", nil, function(v)
         local s = EnsureSel(); if s then s.showWhenAbsent = v end; MSWA_RequestUpdateSpells()
     end)
     baAbsentCheck:SetPoint("TOPLEFT", reminderTextLabel, "BOTTOMLEFT", 0, -10)
-
     local baDesatCheck = W.Checkbox(c, "Desaturate icon when absent", nil, function(v)
         local s = EnsureSel(); if s then s.desaturateOnAbsent = v end; MSWA_RequestUpdateSpells()
     end)
     baDesatCheck:SetPoint("TOPLEFT", baAbsentCheck, "BOTTOMLEFT", 0, -4)
-
     local baStacksCheck = W.Checkbox(c, "Show stack count", nil, function(v)
         local s = EnsureSel(); if s then s.showStacks = v end; MSWA_RequestUpdateSpells()
     end)
     baStacksCheck:SetPoint("TOPLEFT", baDesatCheck, "BOTTOMLEFT", 0, -4)
 
-    -- Charge sub-settings
     local chargeMaxLabel = W.Label(c, "Max charges:", "TOPLEFT", baStacksCheck, "BOTTOMLEFT", 0, -10)
     local chargeMaxEdit = W.EditBox(c, 50, 22, true)
     chargeMaxEdit:SetPoint("LEFT", chargeMaxLabel, "RIGHT", 8, 0)
@@ -621,7 +698,6 @@ local function BuildTriggerPage(host)
         local s = EnsureSel(); if s then local v = tonumber(self:GetText()); if v and v >= 1 then s.chargeMax = v end end
         MSWA_RequestUpdateSpells()
     end)
-
     local chargeDurLabel = W.Label(c, "Recharge time:", "TOPLEFT", chargeMaxLabel, "BOTTOMLEFT", 0, -6)
     local chargeDurEdit = W.EditBox(c, 50, 22)
     chargeDurEdit:SetPoint("LEFT", chargeDurLabel, "RIGHT", 8, 0)
@@ -630,8 +706,8 @@ local function BuildTriggerPage(host)
         MSWA_RequestUpdateSpells()
     end)
 
-    -- Spell/Item ID section
-    local idHeader = W.SectionHeader(c, "Spell / Item ID", chargeDurLabel, -16)
+    -- Spell/Item ID section (re-anchored dynamically in Refresh)
+    local idHeader = W.SectionHeader(c, "Spell / Item ID", subAnchor, -14)
     local rekeyLabel = W.Label(c, "ID:", "TOPLEFT", idHeader, "BOTTOMLEFT", 0, -10)
     local rekeyEdit = W.EditBox(c, 80, 22, true)
     rekeyEdit:SetPoint("LEFT", rekeyLabel, "RIGHT", 8, 0)
@@ -644,10 +720,10 @@ local function BuildTriggerPage(host)
         else MSWA_Print("Could not change ID: " .. tostring(result)) end
     end)
     rekeyBtn:SetPoint("LEFT", rekeyEdit, "RIGHT", 6, 0)
-    W.MutedLabel(c, "Change spell/item ID. All settings preserved.", "TOPLEFT", rekeyLabel, "BOTTOMLEFT", 0, -4)
+    local rekeyHint = W.MutedLabel(c, "Change spell/item ID. All settings preserved.", "TOPLEFT", rekeyLabel, "BOTTOMLEFT", 0, -4)
 
-    -- Anchor section
-    local anchorHeader = W.SectionHeader(c, "Anchor", rekeyBtn, -28)
+    -- Anchor section (re-anchored dynamically in Refresh)
+    local anchorHeader = W.SectionHeader(c, "Anchor", rekeyHint, -12)
     local anchorLabel = W.Label(c, "Frame:", "TOPLEFT", anchorHeader, "BOTTOMLEFT", 0, -10)
     local anchorEdit = W.EditBox(c, 220, 22)
     anchorEdit:SetPoint("LEFT", anchorLabel, "RIGHT", 8, 0)
@@ -675,9 +751,47 @@ local function BuildTriggerPage(host)
         local key = GetSelKey(); if not key then return end
         local db = MSWA_GetDB(); local s = GetSel() or {}
         local curMode = s.auraMode
+        local isDraft = MSWA_IsDraftKey(key)
+
+        -- Dynamic page title: aura name + mode badge
+        local name = MSWA_GetDisplayNameForKey(key) or "New Aura"
+        local abTag = ""
+        if curMode == "AUTOBUFF" then abTag = " |cff44ddff[Auto Buff]|r"
+        elseif curMode == "BUFF_THEN_CD" then abTag = " |cff44ffaa[Buff > CD]|r"
+        elseif curMode == "REMINDER_BUFF" then abTag = " |cffff6644[Reminder]|r"
+        elseif curMode == "CHARGES" then abTag = " |cff44ddff[Charges]|r"
+        elseif curMode == "BUFF_AURA" then abTag = " |cff55bbff[Buff Aura]|r" end
+        pageTitle:SetText(name .. abTag)
+
+        -- Subtitle: spell/item ID info
+        if isDraft then
+            pageSub:SetText("Enter a Spell or Item ID below, or drag from Spellbook/Bags.")
+        elseif MSWA_IsItemKey(key) then
+            pageSub:SetText(("Item %d"):format(MSWA_KeyToItemID(key) or 0))
+        elseif type(key) == "number" then
+            pageSub:SetText(("Spell %d"):format(key))
+        elseif MSWA_IsSpellInstanceKey(key) then
+            pageSub:SetText(("Spell %d (instance)"):format(MSWA_KeyToSpellID(key) or 0))
+        else
+            pageSub:SetText("")
+        end
+
+        -- Show Add-ID area only for drafts (or always visible at reduced prominence)
+        addLabel:SetShown(isDraft); addEdit:SetShown(isDraft); addBtn:SetShown(isDraft)
+        dropZone:SetShown(isDraft)
+
+        -- Sync mode cards
         for i, m in ipairs(MODES) do modeCards[i]:SetSelected((curMode or "nil") == (m.key or "nil")) end
 
-        -- Show/hide mode sub-settings
+        -- Dynamic anchor: modeHeader moves up when add-area hidden
+        modeHeader:ClearAllPoints()
+        if isDraft then
+            modeHeader:SetPoint("TOPLEFT", dropZone, "BOTTOMLEFT", 0, -12)
+        else
+            modeHeader:SetPoint("TOPLEFT", pageSub, "BOTTOMLEFT", 0, -12)
+        end
+
+        -- Show/hide sub-settings per mode
         local hasBuffMode = (curMode == "AUTOBUFF" or curMode == "BUFF_THEN_CD" or curMode == "REMINDER_BUFF")
         local isReminder = (curMode == "REMINDER_BUFF")
         local isCharges = (curMode == "CHARGES")
@@ -691,6 +805,34 @@ local function BuildTriggerPage(host)
         chargeMaxLabel:SetShown(isCharges); chargeMaxEdit:SetShown(isCharges)
         chargeDurLabel:SetShown(isCharges); chargeDurEdit:SetShown(isCharges)
 
+        -- DYNAMIC RE-ANCHOR: idHeader anchors to last visible sub-element
+        -- Hide rekey for drafts (drafts use the Add-ID area at top)
+        idHeader:SetShown(not isDraft); rekeyLabel:SetShown(not isDraft); rekeyEdit:SetShown(not isDraft); rekeyBtn:SetShown(not isDraft); rekeyHint:SetShown(not isDraft)
+
+        if not isDraft then
+            idHeader:ClearAllPoints()
+            if isCharges then
+                idHeader:SetPoint("TOPLEFT", chargeDurLabel, "BOTTOMLEFT", 0, -14)
+            elseif isBuffAura then
+                idHeader:SetPoint("TOPLEFT", baStacksCheck, "BOTTOMLEFT", 0, -14)
+            elseif isReminder then
+                idHeader:SetPoint("TOPLEFT", reminderTextLabel, "BOTTOMLEFT", 0, -14)
+            elseif hasBuffMode then
+                idHeader:SetPoint("TOPLEFT", hasteCheck, "BOTTOMLEFT", 0, -14)
+            else
+                idHeader:SetPoint("TOPLEFT", subAnchor, "BOTTOMLEFT", 0, -14)
+            end
+        end
+
+        -- Anchor section: re-anchor below idHeader or mode cards for drafts
+        anchorHeader:ClearAllPoints()
+        if isDraft then
+            anchorHeader:SetPoint("TOPLEFT", subAnchor, "BOTTOMLEFT", 0, -14)
+        else
+            anchorHeader:SetPoint("TOPLEFT", rekeyHint, "BOTTOMLEFT", 0, -12)
+        end
+
+        -- Sync values
         if hasBuffMode then
             local dur = s.autoBuffDuration or (isReminder and 3600 or 10)
             buffDurEdit:SetText(tostring(math.floor(tonumber(dur) * 1000 + 0.5) / 1000))
@@ -708,14 +850,12 @@ local function BuildTriggerPage(host)
             chargeDurEdit:SetText(tostring(s.chargeDuration or 0))
         end
 
-        -- Rekey
+        -- Rekey (sync value)
         local currentID
         if MSWA_IsItemKey(key) then currentID = MSWA_KeyToItemID(key)
         elseif MSWA_IsSpellInstanceKey(key) then currentID = MSWA_KeyToSpellID(key)
         elseif type(key) == "number" then currentID = key end
         rekeyEdit:SetText(currentID and tostring(currentID) or "")
-        local isDraft = MSWA_IsDraftKey(key)
-        rekeyLabel:SetShown(not isDraft); rekeyEdit:SetShown(not isDraft); rekeyBtn:SetShown(not isDraft)
 
         -- Anchor
         local gid2 = MSWA_GetAuraGroup and MSWA_GetAuraGroup(key) or nil
@@ -733,8 +873,8 @@ end
 local function BuildLookPage(host)
     local f = W.ScrollPage(host)
     local c = f._content
-    W.Title(c, "Appearance", 12, -10)
-    W.MutedLabel(c, "Display type, icon/bar settings.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+    local pageTitle = W.Title(c, "", 12, -10)
+    W.MutedLabel(c, "Display type, icon/bar settings.", "TOPLEFT", c, "TOPLEFT", 12, -30)
 
     local dtHeader = W.SectionHeader(c, "Display Type", nil, -54)
     local dtIcon = W.ModeCard(c, "Icon", "Square button", 155, 36)
@@ -745,15 +885,28 @@ local function BuildLookPage(host)
     dtIcon:SetScript("OnMouseDown", function() local s = EnsureSel(); if s then s.displayType = nil end; MSWA_RequestUpdateSpells(); f:Refresh() end)
     dtBar:SetScript("OnMouseDown", function() local s = EnsureSel(); if s then s.displayType = "BAR" end; MSWA_RequestUpdateSpells(); f:Refresh() end)
 
-    -- Icon settings
+    -- ── Icon settings ──
     local iconHeader = W.SectionHeader(c, "Icon Settings", dtIcon, -16)
 
     local ciLabel = W.Label(c, "Custom Icon ID:", "TOPLEFT", iconHeader, "BOTTOMLEFT", 0, -10)
     local ciEdit = W.EditBox(c, 70, 22, true)
     ciEdit:SetPoint("LEFT", ciLabel, "RIGHT", 8, 0)
+
+    -- Icon preview + clear button
+    local ciPreview = c:CreateTexture(nil, "ARTWORK")
+    ciPreview:SetSize(22, 22); ciPreview:SetPoint("LEFT", ciEdit, "RIGHT", 6, 0)
+    ciPreview:SetTexCoord(0.07, 0.93, 0.07, 0.93); ciPreview:Hide()
+    local ciClear = W.Button(c, "X", 22, 22, function()
+        local s = EnsureSel(); if s then s.customIconID = nil end
+        ciEdit:SetText(""); ciPreview:Hide()
+        MSWA_InvalidateIconCache(); MSWA_RefreshOptionsList()
+    end)
+    ciClear:SetPoint("LEFT", ciPreview, "RIGHT", 4, 0)
+
     ciEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
         local s = EnsureSel(); if not s then return end
         local v = tonumber(self:GetText()); s.customIconID = (v and v > 0) and v or nil
+        if v and v > 0 then ciPreview:SetTexture(v); ciPreview:Show() else ciPreview:Hide() end
         MSWA_InvalidateIconCache(); MSWA_RefreshOptionsList()
     end)
 
@@ -766,7 +919,7 @@ local function BuildLookPage(host)
     local cbDecimal = W.Checkbox(c, "Show decimal (e.g. 3.7 instead of 4)", nil, function(v) local s = EnsureSel(); if s then s.showDecimal = v end; MSWA_InvalidateIconCache(); MSWA_RequestUpdateSpells() end)
     cbDecimal:SetPoint("TOPLEFT", cbSwipe, "BOTTOMLEFT", 0, -4)
 
-    -- Bar settings
+    -- ── Bar settings ──
     local barHeader = W.SectionHeader(c, "Bar Settings", cbDecimal, -16)
     local barNameLabel = W.Label(c, "Name:", "TOPLEFT", barHeader, "BOTTOMLEFT", 0, -10)
     local barNameEdit = W.EditBox(c, 180, 22)
@@ -781,9 +934,7 @@ local function BuildLookPage(host)
     local barWEdit = W.EditBox(c, 60, 22, true); barWEdit:SetPoint("LEFT", barWLabel, "RIGHT", 8, 0)
     local barHLabel = W.Label(c, "H:", "LEFT", barWEdit, "RIGHT", 8, 0)
     local barHEdit = W.EditBox(c, 60, 22, true); barHEdit:SetPoint("LEFT", barHLabel, "RIGHT", 4, 0)
-
-    local function ApplyBarSize()
-        local s = EnsureSel(); if not s then return end
+    local function ApplyBarSize() local s = EnsureSel(); if not s then return end
         local w = tonumber(barWEdit:GetText()); if w and w > 0 then s.barWidth = w end
         local h = tonumber(barHEdit:GetText()); if h and h > 0 then s.barHeight = h end
         MSWA_RequestUpdateSpells()
@@ -791,13 +942,46 @@ local function BuildLookPage(host)
     barWEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyBarSize() end)
     barHEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyBarSize() end)
 
+    local barFontLabel = W.Label(c, "Font size:", "TOPLEFT", barWLabel, "BOTTOMLEFT", 0, -8)
+    local barFontEdit = W.EditBox(c, 50, 22, true); barFontEdit:SetPoint("LEFT", barFontLabel, "RIGHT", 8, 0)
+    barFontEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local s = EnsureSel(); if s then local v = tonumber(self:GetText()); if v and v >= 6 and v <= 48 then s.barFontSize = v end end; MSWA_RequestUpdateSpells()
+    end)
+
     local barColor = W.ColorSwatch(c, "Bar Color",
         function() local s = GetSel(); local bc = s and s.barColor or { r = 0.9, g = 0.7, b = 0 }; return { bc.r, bc.g, bc.b } end,
         function(v) local s = EnsureSel(); if s then s.barColor = { r = v[1], g = v[2], b = v[3] } end; MSWA_RequestUpdateSpells() end)
-    barColor:SetPoint("TOPLEFT", barWLabel, "BOTTOMLEFT", 0, -8)
+    barColor:SetPoint("TOPLEFT", barFontLabel, "BOTTOMLEFT", 0, -8)
 
+    -- Fill Direction dropdown
+    local ddFillDir = W.Dropdown(c, "Fill Direction", 200,
+        function() return {
+            { text = "Left -> Right", value = "LR" }, { text = "Right -> Left", value = "RL" },
+            { text = "Bottom -> Top (vertical)", value = "BT" }, { text = "Top -> Bottom (vertical)", value = "TB" },
+        } end,
+        function() local s = GetSel(); return s and s.barFillDir or "LR" end,
+        function(v) local s = EnsureSel(); if s then s.barFillDir = v end; MSWA_RequestUpdateSpells() end)
+    ddFillDir:SetPoint("TOPLEFT", barColor, "BOTTOMLEFT", 0, -8)
+
+    -- Icon Position dropdown
+    local ddIconPos = W.Dropdown(c, "Icon Position", 140,
+        function() return { { text = "Left", value = "LEFT" }, { text = "Right", value = "RIGHT" }, { text = "Top", value = "TOP" }, { text = "Bottom", value = "BOTTOM" } } end,
+        function() local s = GetSel(); return s and s.barIconPos or "LEFT" end,
+        function(v) local s = EnsureSel(); if s then s.barIconPos = v end; MSWA_RequestUpdateSpells() end)
+    ddIconPos:SetPoint("TOPLEFT", ddFillDir, "BOTTOMLEFT", 0, -4)
+
+    -- Bar Texture
+    local barTexLabel = W.Label(c, "Texture:", "TOPLEFT", ddIconPos, "BOTTOMLEFT", 0, -8)
+    local barTexEdit = W.EditBox(c, 200, 22)
+    barTexEdit:SetPoint("LEFT", barTexLabel, "RIGHT", 8, 0)
+    barTexEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local s = EnsureSel(); if s then local v = self:GetText(); s.barTexture = (v ~= "" and v) or nil end; MSWA_RequestUpdateSpells()
+    end)
+    W.MutedLabel(c, "SharedMedia name or path. Leave empty for default.", "TOPLEFT", barTexLabel, "BOTTOMLEFT", 0, -4)
+
+    -- Checkboxes
     local cbBarName = W.Checkbox(c, "Show name", nil, function(v) local s = EnsureSel(); if s then s.barShowName = v end; MSWA_RequestUpdateSpells() end)
-    cbBarName:SetPoint("TOPLEFT", barColor, "BOTTOMLEFT", 0, -8)
+    cbBarName:SetPoint("TOPLEFT", barTexLabel, "BOTTOMLEFT", 0, -22)
     local cbBarTimer = W.Checkbox(c, "Show timer", nil, function(v) local s = EnsureSel(); if s then s.barShowTimer = v end; MSWA_RequestUpdateSpells() end)
     cbBarTimer:SetPoint("TOPLEFT", cbBarName, "BOTTOMLEFT", 0, -4)
     local cbBarSpark = W.Checkbox(c, "Show spark", nil, function(v) local s = EnsureSel(); if s then s.barShowSpark = v end; MSWA_RequestUpdateSpells() end)
@@ -805,37 +989,37 @@ local function BuildLookPage(host)
     local cbBarIcon = W.Checkbox(c, "Show icon", nil, function(v) local s = EnsureSel(); if s then s.barShowIcon = v end; MSWA_RequestUpdateSpells() end)
     cbBarIcon:SetPoint("TOPLEFT", cbBarSpark, "BOTTOMLEFT", 0, -4)
 
-    c:SetHeight(800)
+    c:SetHeight(1000)
 
     function f:Refresh()
+        local key = GetSelKey(); if key then pageTitle:SetText(MSWA_GetDisplayNameForKey(key) or "Aura") end
         local s = GetSel() or {}
         local isBar = (s.displayType == "BAR")
         dtIcon:SetSelected(not isBar); dtBar:SetSelected(isBar)
 
         -- Show/hide bar vs icon settings
-        barHeader:SetShown(isBar); barNameLabel:SetShown(isBar); barNameEdit:SetShown(isBar)
-        barWLabel:SetShown(isBar); barWEdit:SetShown(isBar); barHLabel:SetShown(isBar); barHEdit:SetShown(isBar)
-        barColor:SetShown(isBar); cbBarName:SetShown(isBar); cbBarTimer:SetShown(isBar); cbBarSpark:SetShown(isBar); cbBarIcon:SetShown(isBar)
+        local barItems = { barHeader, barNameLabel, barNameEdit, barWLabel, barWEdit, barHLabel, barHEdit, barFontLabel, barFontEdit,
+            barColor, ddFillDir, ddIconPos, barTexLabel, barTexEdit, cbBarName, cbBarTimer, cbBarSpark, cbBarIcon }
+        for _, item in ipairs(barItems) do if item.SetShown then item:SetShown(isBar) elseif item.Show then if isBar then item:Show() else item:Hide() end end end
 
         -- Icon settings
-        ciEdit:SetText(tostring((s.customIconID and s.customIconID > 0) and s.customIconID or ""))
+        local cid = s.customIconID
+        ciEdit:SetText((cid and cid > 0) and tostring(cid) or "")
+        if cid and cid > 0 then ciPreview:SetTexture(cid); ciPreview:Show() else ciPreview:Hide() end
         cbGray:SetChecked(s.grayOnCooldown and true or false)
         cbGrayZero:SetChecked(s.showOnZeroCount and true or false)
         cbSwipe:SetChecked(s.swipeDarken and true or false)
         cbDecimal:SetChecked(s.showDecimal and true or false)
 
-        -- Bar settings
         if isBar then
-            local key = GetSelKey()
             local db = MSWA_GetDB(); local cn = (db.customNames and db.customNames[key]) or ""
             barNameEdit:SetText(cn ~= "" and cn or (MSWA_GetDisplayNameForKey(key) or ""))
-            barWEdit:SetText(tostring(s.barWidth or 200))
-            barHEdit:SetText(tostring(s.barHeight or 22))
-            barColor:Refresh()
-            cbBarName:SetChecked(s.barShowName ~= false)
-            cbBarTimer:SetChecked(s.barShowTimer ~= false)
-            cbBarSpark:SetChecked(s.barShowSpark ~= false)
-            cbBarIcon:SetChecked(s.barShowIcon ~= false)
+            barWEdit:SetText(tostring(s.barWidth or 200)); barHEdit:SetText(tostring(s.barHeight or 22))
+            barFontEdit:SetText(tostring(s.barFontSize or s.textFontSize or db.textFontSize or 12))
+            barColor:Refresh(); ddFillDir:Refresh(); ddIconPos:Refresh()
+            barTexEdit:SetText(s.barTexture or "")
+            cbBarName:SetChecked(s.barShowName ~= false); cbBarTimer:SetChecked(s.barShowTimer ~= false)
+            cbBarSpark:SetChecked(s.barShowSpark ~= false); cbBarIcon:SetChecked(s.barShowIcon ~= false)
         end
     end
     return f
@@ -847,8 +1031,8 @@ end
 local function BuildTextPage(host)
     local f = W.ScrollPage(host)
     local c = f._content
-    W.Title(c, "Text & Stacks", 12, -10)
-    W.MutedLabel(c, "Timer text formatting and stack counter settings.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+    local pageTitle = W.Title(c, "", 12, -10)
+    W.MutedLabel(c, "Timer text formatting and stack counter settings.", "TOPLEFT", c, "TOPLEFT", 12, -30)
 
     local h1 = W.SectionHeader(c, "Timer Text", nil, -54)
 
@@ -912,6 +1096,7 @@ local function BuildTextPage(host)
     c:SetHeight(600)
 
     function f:Refresh()
+        local key = GetSelKey(); if key then pageTitle:SetText(MSWA_GetDisplayNameForKey(key) or "Aura") end
         local s = GetSel() or {}; local db = MSWA_GetDB()
         ddFont:Refresh()
         local sz = tonumber(s.textFontSize or db.textFontSize or 12); sizeEdit:SetText(tostring(math.max(6, math.min(48, sz))))
@@ -931,7 +1116,7 @@ local function BuildGlowPage(host)
     local f = W.ScrollPage(host)
     local c = f._content
     local avail = MSWA_IsGlowAvailable and MSWA_IsGlowAvailable() or false
-    W.Title(c, avail and "Glow Settings" or "Glow (LibCustomGlow not found)", 12, -10)
+    local pageTitle = W.Title(c, "", 12, -10)
 
     local cbEnable = W.Checkbox(c, "Enable Glow", nil, function(v)
         local s = EnsureSel(); if not s then return end
@@ -987,6 +1172,7 @@ local function BuildGlowPage(host)
     c:SetHeight(500)
 
     function f:Refresh()
+        local key = GetSelKey(); if key then pageTitle:SetText(MSWA_GetDisplayNameForKey(key) or "Aura") end
         local s = GetSel() or {}; local gs = s.glow or {}
         cbEnable:SetChecked(gs.enabled and true or false)
         ddType:Refresh(); glowColor:Refresh(); ddCond:Refresh()
@@ -1007,8 +1193,8 @@ end
 local function BuildSoundPage(host)
     local f = W.ScrollPage(host)
     local c = f._content
-    W.Title(c, "Sound Effects", 12, -10)
-    W.MutedLabel(c, "Play sounds when cooldowns start or become ready.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+    local pageTitle = W.Title(c, "", 12, -10)
+    W.MutedLabel(c, "Play sounds when cooldowns start or become ready.", "TOPLEFT", c, "TOPLEFT", 12, -30)
 
     local function SoundOpts()
         local out = {{ text = "-- None --", value = "NONE" }}
@@ -1041,7 +1227,7 @@ local function BuildSoundPage(host)
     ddCh:SetPoint("TOPLEFT", ddReady, "BOTTOMLEFT", 0, -8)
 
     c:SetHeight(280)
-    function f:Refresh() ddStart:Refresh(); ddReady:Refresh(); ddCh:Refresh() end
+    function f:Refresh() local key = GetSelKey(); if key then pageTitle:SetText(MSWA_GetDisplayNameForKey(key) or "Aura") end; ddStart:Refresh(); ddReady:Refresh(); ddCh:Refresh() end
     return f
 end
 
@@ -1051,8 +1237,8 @@ end
 local function BuildAlphaPage(host)
     local f = W.ScrollPage(host)
     local c = f._content
-    W.Title(c, "Alpha / Visibility", 12, -10)
-    W.MutedLabel(c, "Control icon opacity per state.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+    local pageTitle = W.Title(c, "", 12, -10)
+    W.MutedLabel(c, "Control icon opacity per state.", "TOPLEFT", c, "TOPLEFT", 12, -30)
 
     local function MakeAlphaSlider(label, field, anchor, yOff)
         local sl = W.Slider(c, label, 0, 100, 1,
@@ -1069,7 +1255,7 @@ local function BuildAlphaPage(host)
     local slReady = MakeAlphaSlider("Ready", "readyAlpha", slCombat)
 
     c:SetHeight(340)
-    function f:Refresh() slCD:Refresh(); slOOC:Refresh(); slCombat:Refresh(); slReady:Refresh() end
+    function f:Refresh() local key = GetSelKey(); if key then pageTitle:SetText(MSWA_GetDisplayNameForKey(key) or "Aura") end; slCD:Refresh(); slOOC:Refresh(); slCombat:Refresh(); slReady:Refresh() end
     return f
 end
 
@@ -1079,8 +1265,8 @@ end
 local function BuildLoadPage(host)
     local f = W.ScrollPage(host)
     local c = f._content
-    W.Title(c, "Load Conditions", 12, -10)
-    W.MutedLabel(c, "Control when this aura is active.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+    local pageTitle = W.Title(c, "", 12, -10)
+    W.MutedLabel(c, "Control when this aura is active.", "TOPLEFT", c, "TOPLEFT", 12, -30)
 
     local cbNever = W.Checkbox(c, "Never (disable)", nil, function(v)
         local s = EnsureSel(); if s then s.loadNever = v or nil end; MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
@@ -1129,6 +1315,7 @@ local function BuildLoadPage(host)
     c:SetHeight(320)
 
     function f:Refresh()
+        local key = GetSelKey(); if key then pageTitle:SetText(MSWA_GetDisplayNameForKey(key) or "Aura") end
         local s = GetSel() or {}
         cbNever:SetChecked(s.loadNever and true or false)
         local cm = s.loadCombatMode
@@ -1148,8 +1335,8 @@ end
 local function BuildPositionPage(host)
     local f = W.ScrollPage(host)
     local c = f._content
-    W.Title(c, "Position & Size", 12, -10)
-    W.MutedLabel(c, "Fine-tune aura placement and dimensions.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+    local pageTitle = W.Title(c, "", 12, -10)
+    W.MutedLabel(c, "Fine-tune aura placement and dimensions.", "TOPLEFT", c, "TOPLEFT", 12, -30)
 
     local h1 = W.SectionHeader(c, "Coordinates", nil, -54)
 
@@ -1186,6 +1373,7 @@ local function BuildPositionPage(host)
     c:SetHeight(320)
 
     function f:Refresh()
+        local key = GetSelKey(); if key then pageTitle:SetText(MSWA_GetDisplayNameForKey(key) or "Aura") end
         local s = GetSel() or {}
         ebX:SetText(("%d"):format(s.x or 0)); ebY:SetText(("%d"):format(s.y or 0))
         ebW:SetText(("%d"):format(s.width or MSWA.ICON_SIZE)); ebH:SetText(("%d"):format(s.height or MSWA.ICON_SIZE))
@@ -1522,8 +1710,7 @@ local function MSWA_CreateOptionsFrame()
     _pageHost:SetPoint("TOPLEFT", navRail, "TOPRIGHT", 6, 0)
     _pageHost:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 0, 0)
 
-    f.rightTitle = _pageHost:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    f.rightTitle:SetPoint("TOPLEFT", _pageHost, "TOPLEFT", 12, -6); f.rightTitle:SetText("Select an Aura"); W.SkinTitle(f.rightTitle)
+    -- rightTitle removed — aura name is shown inside each page header via Refresh()
 
     -- Empty panel
     f.emptyPanel = CreateFrame("Frame", nil, content)
