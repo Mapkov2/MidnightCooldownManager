@@ -660,10 +660,12 @@ local function MSWA_UpdateSpells()
 
                         elseif s and s.auraMode == "BUFF_AURA" then
                             -- ========== BUFF AURA MODE (direct poll, like WeakAuras/EQoL) ==========
-                            -- Uses GetPlayerAuraBySpellID -> nil = absent, table = active
+                            -- CDM entries: read aura from CDM viewer frame by cooldownID
+                            -- Non-CDM: GetPlayerAuraBySpellID -> nil = absent, table = active
                             -- issecretvalue pattern from EQoL for field access
                             local buffSID = s.auraSpellID or spellID
-                            local auraData = MSWA_GetPlayerAuraDataBySpellID(buffSID)
+                            local cdmID = s.cdmCooldownID
+                            local auraData = cdmID and MSWA_GetCDMFrameAuraData(cdmID, buffSID) or MSWA_GetPlayerAuraDataBySpellID(buffSID)
                             local buffActive = (auraData ~= nil)
                             local showWhenAbsent = s.showWhenAbsent
                             local showMe = buffActive or showWhenAbsent or previewMode or key == selectedKey
@@ -818,7 +820,8 @@ local function MSWA_UpdateSpells()
                         if s and s.auraMode == "BUFF_AURA" then
                             -- ========== ITEM INSTANCE: BUFF AURA (direct poll) ==========
                             local buffSID = s.auraSpellID or itemID
-                            local auraData = MSWA_GetPlayerAuraDataBySpellID(buffSID)
+                            local cdmID = s.cdmCooldownID
+                            local auraData = cdmID and MSWA_GetCDMFrameAuraData(cdmID, buffSID) or MSWA_GetPlayerAuraDataBySpellID(buffSID)
                             local buffActive = (auraData ~= nil)
                             local showMe = buffActive or s.showWhenAbsent or previewMode or key == selectedKey
 
@@ -1209,7 +1212,8 @@ local function MSWA_UpdateSpells()
                 if s and s.auraMode == "BUFF_AURA" then
                     -- ========== ITEM: BUFF AURA (EQoL GetUnitAuras pattern) ==========
                     local buffSID = s.auraSpellID or itemID
-                    local auraData = MSWA_GetPlayerAuraDataBySpellID(buffSID)
+                    local cdmID = s.cdmCooldownID
+                    local auraData = cdmID and MSWA_GetCDMFrameAuraData(cdmID, buffSID) or MSWA_GetPlayerAuraDataBySpellID(buffSID)
                     local buffActive = (auraData ~= nil)
                     local showMe = buffActive or s.showWhenAbsent or previewMode or key == selectedKey
                     if showMe then
@@ -1642,7 +1646,13 @@ local function MSWA_UpdateSpells()
 
                     if mode == "BUFF_AURA" then
                         local sid = bs.auraSpellID or tonumber(bkey)
-                        local ad = sid and MSWA_GetPlayerAuraDataBySpellID and MSWA_GetPlayerAuraDataBySpellID(sid)
+                        local cdmID = bs.cdmCooldownID
+                        local ad
+                        if cdmID and MSWA_GetCDMFrameAuraData then
+                            ad = MSWA_GetCDMFrameAuraData(cdmID, sid)
+                        elseif sid and MSWA_GetPlayerAuraDataBySpellID then
+                            ad = MSWA_GetPlayerAuraDataBySpellID(sid)
+                        end
                         if ad then
                             local e = ad.expirationTime
                             local d = ad.duration

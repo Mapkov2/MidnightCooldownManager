@@ -23,9 +23,10 @@ local CATEGORIES = {
     { key = "ROGUE_POISONS", name = "Rogue Poisons",           order = 6,  isBuff = true },
     { key = "SHAMAN_IMBUE",  name = "Shaman Imbuements",       order = 7,  isBuff = true },
     { key = "RESOURCE",      name = "Resource Auras",          order = 8,  isBuff = true },
-    { key = "COOLDOWNS",     name = "Your Cooldowns",          order = 9,  isBuff = false, dynamic = true },
-    { key = "SPELLBOOK",     name = "Your Spellbook",          order = 10, dynamic = true },
-    { key = "BAGS",          name = "Your Bags",               order = 11, dynamic = true },
+    { key = "CDM_BUFFS",     name = "CDM Tracked Buffs",       order = 9,  isBuff = true, dynamic = true },
+    { key = "COOLDOWNS",     name = "Your Cooldowns",          order = 10, isBuff = false, dynamic = true },
+    { key = "SPELLBOOK",     name = "Your Spellbook",          order = 11, dynamic = true },
+    { key = "BAGS",          name = "Your Bags",               order = 12, dynamic = true },
 }
 
 MSWA_CATEGORY_LOOKUP = {}
@@ -348,12 +349,115 @@ function MSWA_InvalidateBagCache()
 end
 
 -----------------------------------------------------------
+-- CDM (Cooldown Manager) Tracked Buff scanner
+-- Midnight 12.0: C_CooldownViewer API
+-- Secret-safe: issecretvalue guard on all spellIDs before
+-- any Lua-side comparison or arithmetic.
+-- Zero allocations on repeated calls (cached).
+-----------------------------------------------------------
+
+local cdmResults = nil  -- cached after first scan
+
+-- Resolve spellID + name + icon from a cooldownID via C_CooldownViewer
+-- 1:1 pattern from EQoL CooldownPanels_CDMAuras.lua
+local function ResolveCDMSpell(cooldownID)
+    if not cooldownID then return nil, nil, nil end
+    if not (C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCooldownInfo) then return nil, nil, nil end
+
+    local info = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
+    if not info then return nil, nil, nil end
+
+    -- Prioritised spellID resolution (EQoL order):
+    -- overrideTooltipSpellID > linkedSpellIDs[1] > overrideSpellID > spellID
+    local candidates = {
+        info.overrideTooltipSpellID,
+        info.linkedSpellIDs and info.linkedSpellIDs[1] or nil,
+        info.overrideSpellID,
+        info.spellID,
+    }
+
+    local spellID
+    for i = 1, #candidates do
+        local v = candidates[i]
+        if type(v) == "number" and not (_issecretvalue and _issecretvalue(v)) and v > 0 then
+            spellID = v
+            break
+        end
+    end
+
+    if not spellID then return nil, nil, nil end
+
+    local name, icon
+    if C_Spell and C_Spell.GetSpellInfo then
+        local sInfo = C_Spell.GetSpellInfo(spellID)
+        if sInfo then
+            name = sInfo.name
+            icon = sInfo.iconID
+        end
+    end
+    if not icon and C_Spell and C_Spell.GetSpellTexture then
+        icon = C_Spell.GetSpellTexture(spellID)
+    end
+
+    return spellID, name, icon
+end
+
+function MSWA_ScanCDMBuffs()
+    if cdmResults then return cdmResults end
+
+    cdmResults = {}
+
+    -- Require C_CooldownViewer API (Midnight 12.0+)
+    if not (C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCategorySet) then
+        return cdmResults
+    end
+
+    -- Category enums (TrackedBuff = icon panel, TrackedBar = bar panel)
+    local TrackedBuff = Enum and Enum.CooldownViewerCategory and Enum.CooldownViewerCategory.TrackedBuff
+    local TrackedBar  = Enum and Enum.CooldownViewerCategory and Enum.CooldownViewerCategory.TrackedBar
+
+    local seen = {}  -- [spellID] = true, dedup across both categories
+
+    -- Scan helper: collect from one category
+    local function CollectCategory(category)
+        if not category then return end
+        local ok, cooldownIDs = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category, true)
+        if not ok or type(cooldownIDs) ~= "table" then return end
+        for _, cooldownID in ipairs(cooldownIDs) do
+            local spellID, name, icon = ResolveCDMSpell(cooldownID)
+            if spellID and not seen[spellID] then
+                seen[spellID] = true
+                tinsert(cdmResults, {
+                    sid  = spellID,
+                    name = name or ("Spell:" .. spellID),
+                    icon = icon,
+                    cdmCooldownID = cooldownID,
+                })
+            end
+        end
+    end
+
+    CollectCategory(TrackedBuff)
+    CollectCategory(TrackedBar)
+
+    -- Sort alphabetical
+    table.sort(cdmResults, function(a, b) return (a.name or "") < (b.name or "") end)
+    return cdmResults
+end
+
+function MSWA_InvalidateCDMCache()
+    cdmResults = nil
+end
+
+-----------------------------------------------------------
 -- Dynamic category results wrapper
--- Returns same format as template.spells for SPELLBOOK/BAGS
+-- Returns same format as template.spells for SPELLBOOK/BAGS/CDM_BUFFS
 -----------------------------------------------------------
 
 function MSWA_GetDynamicSpells(catKey)
-    if catKey == "COOLDOWNS" then
+    if catKey == "CDM_BUFFS" then
+        return MSWA_ScanCDMBuffs() or {}
+    elseif catKey == "COOLDOWNS" then
         -- Filter spellbook for spells with cooldowns only
         local all = MSWA_ScanSpellbook() or {}
         local out = {}
@@ -389,11 +493,15 @@ local cacheFrame = CreateFrame("Frame")
 cacheFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 cacheFrame:RegisterEvent("BAG_UPDATE_DELAYED")
 cacheFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+cacheFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 cacheFrame:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_SPECIALIZATION_CHANGED" then
         MSWA_InvalidateSpellbookCache()
+        MSWA_InvalidateCDMCache()
     elseif event == "BAG_UPDATE_DELAYED" then
         MSWA_InvalidateBagCache()
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        MSWA_InvalidateCDMCache()
     end
     -- PLAYER_REGEN_ENABLED: don't auto-scan, just allow next manual scan
 end)

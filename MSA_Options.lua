@@ -445,7 +445,11 @@ MSWA_UpdateDetailPanel = function()
         elseif s and s.auraMode == "CHARGES" then
             abTag = " |cff44ddff[Charges]|r"
         elseif s and s.auraMode == "BUFF_AURA" then
-            abTag = " |cff55bbff[Buff Aura]|r"
+            if s.cdmCooldownID then
+                abTag = " |cff55bbff[CDM Buff]|r"
+            else
+                abTag = " |cff55bbff[Buff Aura]|r"
+            end
         end
         if MSWA_IsDraftKey(key) then f.detailName:SetText("New Aura - ???")
         elseif MSWA_IsItemKey(key) then
@@ -928,7 +932,10 @@ MSWA_UpdateDetailPanel = function()
             if showBuffAuraSub and s then
                 local sid = s.auraSpellID
                 local unit = s.auraUnit or "player"
-                if sid then
+                local cdmID = s.cdmCooldownID
+                if sid and cdmID then
+                    f.buffAuraSpellIDLabel:SetText("|cff888888Tracking: spell " .. sid .. " on " .. unit .. " (CDM:" .. tostring(cdmID) .. ")|r")
+                elseif sid then
                     f.buffAuraSpellIDLabel:SetText("|cff888888Tracking: spell " .. sid .. " on " .. unit .. "|r")
                 else
                     f.buffAuraSpellIDLabel:SetText("|cffff4444No auraSpellID set - enter spell ID above|r")

@@ -337,6 +337,142 @@ function MSWA_GetSpellChargesText(spellID)
 end
 
 -----------------------------------------------------------
+-- CDM (Cooldown Manager) Frame Scanner
+-- Reads aura data directly from CDM viewer frames by
+-- cooldownID.  Cached per-tick via GetTime() sentinel.
+-- Secret-safe: tostring() comparison on cooldownIDs,
+-- auraInstanceID validated via issecretvalue before use.
+-- Hot-path safe: no table allocations after first scan.
+-----------------------------------------------------------
+
+local _cdmFrameCache   = {}  -- [tostring(cooldownID)] = frame
+local _cdmCacheTick    = 0   -- GetTime() of last rebuild
+local _cdmScratch      = {}  -- reusable select() buffer
+
+-- Capture vararg into reusable scratch table (EQoL pattern)
+local function CaptureCDMChildren(buf, ...)
+    wipe(buf)
+    local n = select("#", ...)
+    for i = 1, n do buf[i] = select(i, ...) end
+    return n
+end
+
+-- Rebuild the cooldownID -> frame lookup once per game tick
+local function RebuildCDMFrameCache()
+    local now = GetTime()
+    if _cdmCacheTick == now then return end
+    _cdmCacheTick = now
+    wipe(_cdmFrameCache)
+
+    local viewers = { "BuffIconCooldownViewer", "BuffBarCooldownViewer" }
+    for vi = 1, #viewers do
+        local viewer = _G[viewers[vi]]
+        if viewer then
+            -- Collect from GetChildren
+            if viewer.GetChildren then
+                local childCount = CaptureCDMChildren(_cdmScratch, viewer:GetChildren())
+                for ci = 1, childCount do
+                    local child = _cdmScratch[ci]
+                    if child then
+                        local cdID = child.cooldownID
+                        if not cdID and child.cooldownInfo then cdID = child.cooldownInfo.cooldownID end
+                        if cdID then _cdmFrameCache[tostring(cdID)] = child end
+                    end
+                end
+            end
+            -- Also check layoutChildren (some viewers use this)
+            local lc = viewer.layoutChildren
+            if type(lc) == "table" then
+                for _, child in pairs(lc) do
+                    if type(child) == "table" then
+                        local cdID = child.cooldownID
+                        if not cdID and child.cooldownInfo then cdID = child.cooldownInfo.cooldownID end
+                        if cdID and not _cdmFrameCache[tostring(cdID)] then
+                            _cdmFrameCache[tostring(cdID)] = child
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Check if an auraInstanceID is usable (non-secret, positive number)
+local function IsUsableAuraInstanceID(v)
+    return type(v) == "number" and not (_issecretvalue and _issecretvalue(v)) and v > 0
+end
+
+--- Get aura data from a CDM viewer frame by cooldownID.
+--- Falls back to MSWA_GetPlayerAuraDataBySpellID if frame
+--- scanning yields nothing.
+--- @param cooldownID number|string  stored cdmCooldownID
+--- @param fallbackSID number|nil    spell ID for fallback
+--- @return table|nil  auraData (Blizzard struct or synthetic)
+function MSWA_GetCDMFrameAuraData(cooldownID, fallbackSID)
+    if not cooldownID then
+        if fallbackSID then return MSWA_GetPlayerAuraDataBySpellID(fallbackSID) end
+        return nil
+    end
+
+    RebuildCDMFrameCache()
+
+    local frame = _cdmFrameCache[tostring(cooldownID)]
+    if frame then
+        -- 1) Read auraInstanceID from frame -> GetAuraDataByAuraInstanceID
+        local auraInstanceID = frame.auraInstanceID
+        if IsUsableAuraInstanceID(auraInstanceID) then
+            local auraUnit
+            if type(frame.GetAuraDataUnit) == "function" then
+                local ok, u = pcall(frame.GetAuraDataUnit, frame)
+                if ok and type(u) == "string" and u ~= "" then auraUnit = u end
+            end
+            if not auraUnit and type(frame.auraDataUnit) == "string" then
+                auraUnit = frame.auraDataUnit
+            end
+            if not auraUnit then auraUnit = "player" end
+
+            if C_UnitAuras and C_UnitAuras.GetAuraDataByAuraInstanceID then
+                local auraData = C_UnitAuras.GetAuraDataByAuraInstanceID(auraUnit, auraInstanceID)
+                if auraData then return auraData end
+            end
+        end
+
+        -- 2) Totem fallback (shamans etc.)
+        if frame.totemData ~= nil and GetTotemInfo then
+            local slot = frame.preferredTotemUpdateSlot
+            if not slot and frame.totemData then
+                local ok, s = pcall(function() return frame.totemData.slot end)
+                if ok then slot = s end
+            end
+            if slot then
+                local _, _, startTime, duration = GetTotemInfo(slot)
+                if duration and duration > 0 then
+                    -- Synthetic auraData for totem entry
+                    local iconTex
+                    if frame.Icon and frame.Icon.Icon and frame.Icon.Icon.GetTexture then
+                        iconTex = frame.Icon.Icon:GetTexture()
+                    end
+                    return {
+                        duration       = duration,
+                        expirationTime = startTime + duration,
+                        timeMod        = 1,
+                        applications   = 0,
+                        icon           = iconTex,
+                        _isCDMTotem    = true,
+                    }
+                end
+            end
+        end
+    end
+
+    -- 3) Fallback: standard spellID-based lookup
+    if fallbackSID then
+        return MSWA_GetPlayerAuraDataBySpellID(fallbackSID)
+    end
+    return nil
+end
+
+-----------------------------------------------------------
 -- Glow remaining: named pcall helpers (v4: no closures)
 -----------------------------------------------------------
 

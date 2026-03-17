@@ -33,6 +33,7 @@ local selectedCat
 local selectedTpl
 local spellChecks = {}   -- [index] = true/false
 local currentSpells = {} -- current spell list shown
+local alreadyTracked = {} -- [index] = true if spell already in DB
 
 -----------------------------------------------------------
 -- Constants
@@ -214,21 +215,33 @@ local function CreateBrowser()
     browser.detDesc:SetJustifyH("LEFT")
     browser.detDesc:SetTextColor(0.7, 0.7, 0.7)
 
-    -- Select All / Deselect All
+    -- Select All / Select New / Deselect All
     browser.selAllBtn = CreateFrame("Button", nil, detPanel, "UIPanelButtonTemplate")
-    browser.selAllBtn:SetSize(80, 18)
+    browser.selAllBtn:SetSize(70, 18)
     browser.selAllBtn:SetPoint("TOPLEFT", browser.detDesc, "BOTTOMLEFT", 0, -6)
-    browser.selAllBtn:SetText("Select All")
+    browser.selAllBtn:SetText("All")
     browser.selAllBtn:GetFontString():SetTextColor(1, 1, 1)
     browser.selAllBtn:SetScript("OnClick", function()
         for i = 1, #currentSpells do spellChecks[i] = true end
         MSWA_TB_RefreshSpellList()
     end)
 
+    browser.selNewBtn = CreateFrame("Button", nil, detPanel, "UIPanelButtonTemplate")
+    browser.selNewBtn:SetSize(80, 18)
+    browser.selNewBtn:SetPoint("LEFT", browser.selAllBtn, "RIGHT", 2, 0)
+    browser.selNewBtn:SetText("New Only")
+    browser.selNewBtn:GetFontString():SetTextColor(0.5, 1, 0.5)
+    browser.selNewBtn:SetScript("OnClick", function()
+        for i = 1, #currentSpells do
+            spellChecks[i] = not alreadyTracked[i]
+        end
+        MSWA_TB_RefreshSpellList()
+    end)
+
     browser.deselBtn = CreateFrame("Button", nil, detPanel, "UIPanelButtonTemplate")
-    browser.deselBtn:SetSize(90, 18)
-    browser.deselBtn:SetPoint("LEFT", browser.selAllBtn, "RIGHT", 4, 0)
-    browser.deselBtn:SetText("Deselect All")
+    browser.deselBtn:SetSize(70, 18)
+    browser.deselBtn:SetPoint("LEFT", browser.selNewBtn, "RIGHT", 2, 0)
+    browser.deselBtn:SetText("None")
     browser.deselBtn:GetFontString():SetTextColor(1, 1, 1)
     browser.deselBtn:SetScript("OnClick", function()
         wipe(spellChecks)
@@ -313,7 +326,18 @@ local function RefreshCategories()
 
         btn:SetPoint("TOPLEFT", 0, -(i - 1) * (ROW_H + 1))
         btn._catKey = cat.key
-        btn.text:SetText(cat.name)
+
+        -- Category text: add count for CDM
+        if cat.key == "CDM_BUFFS" then
+            local cdmSpells = MSWA_ScanCDMBuffs and MSWA_ScanCDMBuffs() or {}
+            if #cdmSpells > 0 then
+                btn.text:SetText(cat.name .. " |cff888888(" .. #cdmSpells .. ")|r")
+            else
+                btn.text:SetText(cat.name)
+            end
+        else
+            btn.text:SetText(cat.name)
+        end
 
         -- Category icon: use first spell of first template in this category
         local icon = nil
@@ -322,6 +346,14 @@ local function RefreshCategories()
                 icon = 133743 -- Spellbook icon
             elseif cat.key == "COOLDOWNS" then
                 icon = 136243 -- Spell_Nature_TimeStop (cooldown clock icon)
+            elseif cat.key == "CDM_BUFFS" then
+                -- Dynamic: use first CDM buff icon if available
+                local cdmSpells = MSWA_ScanCDMBuffs and MSWA_ScanCDMBuffs()
+                if cdmSpells and cdmSpells[1] and cdmSpells[1].icon then
+                    icon = cdmSpells[1].icon
+                else
+                    icon = 136243 -- Spell_Nature_TimeStop fallback
+                end
             else
                 icon = 133633 -- Backpack icon
             end
@@ -336,9 +368,9 @@ local function RefreshCategories()
         btn:SetScript("OnClick", function(self)
             selectedCat = self._catKey
             selectedTpl = nil
+            MSWA_TB_ClearDetail()
             RefreshCategories()   -- update highlight
             MSWA_TB_RefreshTemplates()
-            MSWA_TB_ClearDetail()
         end)
 
         Highlight(btn, cat.key == selectedCat)
@@ -363,7 +395,32 @@ function MSWA_TB_RefreshTemplates()
     local isDynamic = catInfo and catInfo.dynamic
 
     local items = {}
-    if isDynamic then
+    if selectedCat == "CDM_BUFFS" then
+        -- CDM: single pack template with all tracked buffs as checkboxes
+        local dynSpells = MSWA_GetDynamicSpells("CDM_BUFFS")
+        if #dynSpells > 0 then
+            tinsert(items, {
+                id     = "cdm_buffs_all",
+                name   = "All CDM Buffs (" .. #dynSpells .. ")",
+                desc   = "All buffs from your Cooldown Manager.\nIcons appear only while the buff is active.\nAlready tracked spells are unchecked.",
+                spells = dynSpells,
+            })
+        end
+        if #items == 0 then
+            if InCombatLockdown() then
+                browser.statusText:SetText("|cffff9900Leave combat to scan CDM tracked buffs.|r")
+            else
+                browser.statusText:SetText("|cff888888No CDM tracked buffs found. Add buffs to your Cooldown Manager first.|r")
+            end
+        else
+            browser.statusText:SetText("")
+        end
+        -- Auto-select the single pack
+        if items[1] and not selectedTpl then
+            selectedTpl = items[1].id
+            MSWA_TB_ShowDetail(items[1])
+        end
+    elseif isDynamic then
         -- Dynamic: show individual spells/items as "templates"
         local dynSpells = MSWA_GetDynamicSpells(selectedCat)
         for i, sp in ipairs(dynSpells) do
@@ -377,7 +434,11 @@ function MSWA_TB_RefreshTemplates()
         end
         -- Show "Scan" message if in combat
         if #items == 0 and InCombatLockdown() then
-            browser.statusText:SetText("Leave combat to scan " .. (selectedCat == "SPELLBOOK" and "spellbook" or selectedCat == "COOLDOWNS" and "cooldowns" or "bags"))
+            local what = selectedCat == "SPELLBOOK" and "spellbook"
+                or selectedCat == "COOLDOWNS" and "cooldowns"
+                or selectedCat == "CDM_BUFFS" and "CDM tracked buffs"
+                or "bags"
+            browser.statusText:SetText("Leave combat to scan " .. what)
         else
             browser.statusText:SetText("")
         end
@@ -455,8 +516,10 @@ function MSWA_TB_ClearDetail()
     browser.selAllBtn:Hide()
     browser.deselBtn:Hide()
     browser.installBtn:Hide()
+    if browser.selNewBtn then browser.selNewBtn:Hide() end
     wipe(spellChecks)
     wipe(currentSpells)
+    wipe(alreadyTracked)
     for _, row in ipairs(spellRows) do row:Hide() end
 end
 
@@ -468,15 +531,45 @@ function MSWA_TB_ShowDetail(tpl)
     browser.selAllBtn:Show()
     browser.deselBtn:Show()
     browser.installBtn:Show()
+    if browser.selNewBtn then browser.selNewBtn:Show() end
 
-    -- Build spell list
+    -- Build spell list + detect already tracked
     wipe(currentSpells)
     wipe(spellChecks)
+    wipe(alreadyTracked)
+
+    local db = MSWA_GetDB and MSWA_GetDB()
+    local trackedSpells = db and db.trackedSpells or {}
+    local trackedItems  = db and db.trackedItems or {}
+
+    local newCount, trackedCount = 0, 0
     if tpl.spells then
         for i, sp in ipairs(tpl.spells) do
             currentSpells[i] = sp
-            spellChecks[i] = true  -- all checked by default
+            local isTracked = false
+            if sp.isItem and sp.itemID then
+                isTracked = trackedItems[sp.itemID] == true
+            elseif sp.sid then
+                isTracked = trackedSpells[sp.sid] == true
+            end
+            alreadyTracked[i] = isTracked
+            if isTracked then
+                spellChecks[i] = false  -- already tracked: unchecked
+                trackedCount = trackedCount + 1
+            else
+                spellChecks[i] = true   -- new: checked
+                newCount = newCount + 1
+            end
         end
+    end
+
+    -- Update status hint
+    if trackedCount > 0 and newCount > 0 then
+        browser.statusText:SetText(format("|cff88cc88%d new|r  |cff888888%d already tracked|r", newCount, trackedCount))
+    elseif trackedCount > 0 and newCount == 0 then
+        browser.statusText:SetText(format("|cff888888All %d already tracked.|r", trackedCount))
+    else
+        browser.statusText:SetText("")
     end
 
     MSWA_TB_RefreshSpellList()
@@ -539,14 +632,29 @@ function MSWA_TB_RefreshSpellList()
             row.icon:Hide()
         end
 
-        row.nameText:SetText(sp.name or "Unknown")
-
-        if sp.isItem and sp.itemID then
-            row.idText:SetText(format("Item:%d", sp.itemID))
-        elseif sp.sid then
-            row.idText:SetText(format("(%d)", sp.sid))
+        -- Name + tracked state
+        local isTracked = alreadyTracked[i]
+        if isTracked then
+            row.nameText:SetText("|cff666666" .. (sp.name or "Unknown") .. "|r")
+            row.icon:SetDesaturated(true)
+            row.icon:SetAlpha(0.5)
         else
-            row.idText:SetText("")
+            row.nameText:SetText(sp.name or "Unknown")
+            row.icon:SetDesaturated(false)
+            row.icon:SetAlpha(1)
+        end
+
+        -- ID text + tracked tag
+        local idStr = ""
+        if sp.isItem and sp.itemID then
+            idStr = format("Item:%d", sp.itemID)
+        elseif sp.sid then
+            idStr = format("(%d)", sp.sid)
+        end
+        if isTracked then
+            row.idText:SetText("|cff44aa44tracked|r " .. idStr)
+        else
+            row.idText:SetText(idStr)
         end
 
         row:Show()
@@ -602,7 +710,13 @@ function MSWA_TB_DoInstall()
                     s.auraMode = "BUFF_AURA"
                     s.auraSpellID = sid
                     s.auraUnit = "player"
-                    if s.showWhenAbsent == nil then s.showWhenAbsent = true end
+                    if sp.cdmCooldownID then
+                        -- CDM buff: hide when absent, show only on proc (EQOL behavior)
+                        s.cdmCooldownID = sp.cdmCooldownID
+                        s.showWhenAbsent = false
+                    else
+                        if s.showWhenAbsent == nil then s.showWhenAbsent = true end
+                    end
                     if s.desaturateOnAbsent == nil then s.desaturateOnAbsent = true end
                     if s.alphaOnAbsent == nil then s.alphaOnAbsent = 0.45 end
                     if s.showStacks == nil then s.showStacks = true end
@@ -614,11 +728,28 @@ function MSWA_TB_DoInstall()
     end
 
     if installed > 0 then
-        browser.statusText:SetText(format("|cff55ff55Installed %d aura(s)!|r", installed))
+        -- Re-detect tracked state after install
+        local msg = format("|cff55ff55Installed %d aura(s)!|r", installed)
+        browser.statusText:SetText(msg)
         if MSWA_RequestUpdateSpells then MSWA_RequestUpdateSpells() end
         if MSWA_RefreshOptionsList then MSWA_RefreshOptionsList() end
+        -- Refresh tracked markers in spell list
+        local db2 = MSWA_GetDB and MSWA_GetDB()
+        if db2 then
+            local ts = db2.trackedSpells or {}
+            local ti = db2.trackedItems or {}
+            for i, sp in ipairs(currentSpells) do
+                if sp.isItem and sp.itemID then
+                    alreadyTracked[i] = ti[sp.itemID] == true
+                elseif sp.sid then
+                    alreadyTracked[i] = ts[sp.sid] == true
+                end
+                if alreadyTracked[i] then spellChecks[i] = false end
+            end
+        end
+        MSWA_TB_RefreshSpellList()
     else
-        browser.statusText:SetText("|cffff5555No spells selected.|r")
+        browser.statusText:SetText("|cffff9900No new spells selected.|r")
     end
 end
 
@@ -635,6 +766,7 @@ function MSWA_ToggleTemplateBrowser()
         if not InCombatLockdown() then
             MSWA_InvalidateSpellbookCache()
             MSWA_InvalidateBagCache()
+            MSWA_InvalidateCDMCache()
         end
         selectedCat = nil
         selectedTpl = nil
