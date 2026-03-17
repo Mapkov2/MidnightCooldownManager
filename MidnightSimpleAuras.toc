@@ -2,7 +2,7 @@
 ## Title: MidnightSimpleAuras
 ## Notes: Simple personal auras tracker for Midnight.
 ## Author: Mapko
-## Version: 1.8
+## Version: 1.9
 ## SavedVariables: MidnightSimpleAurasDB
 ## OptionalDeps: LibSharedMedia-3.0, Masque, LibCustomGlow-1.0
 
@@ -22,6 +22,7 @@ MSA_Bars.lua
 MSA_Sound.lua
 MSA_UpdateEngine.lua
 MSA_ExportImport.lua
+MSA_Widgets.lua
 MSA_Options.lua
 MSA_PlayerBuffs.lua
 MSA_BuffTemplates.lua

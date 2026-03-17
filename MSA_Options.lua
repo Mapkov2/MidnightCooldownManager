@@ -320,1341 +320,1112 @@ local function MSWA_BuildListEntries()
     return entries
 end
 
------------------------------------------------------------
--- Re-declare after full definition
------------------------------------------------------------
+-- ########################################################
+-- V2 REWRITE STARTS HERE — MSUF/PeelDamage Midnight Theme
+-- ########################################################
 
+local W = MSWA_W
+local T = W and W.Theme or {}
+
+-----------------------------------------------------------
+-- Re-declare after full definition (same as original)
+-----------------------------------------------------------
 MSWA_RefreshOptionsList = function()
-    local f = MSWA.optionsFrame
-    if not f then return end
-    if f.UpdateAuraList then f:UpdateAuraList() else MSWA_UpdateDetailPanel() end
+    local f = MSWA.optionsFrame; if not f then return end
+    if f.UpdateAuraList then f:UpdateAuraList() end
+    if type(MSWA_UpdateDetailPanel) == "function" then MSWA_UpdateDetailPanel() end
 end
 
 -----------------------------------------------------------
--- Detail panel update
+-- NAV PAGES definition
 -----------------------------------------------------------
+local NAV_PAGES = {
+    { key = "trigger", label = "Trigger" },
+    { key = "look",    label = "Look" },
+    { key = "text",    label = "Text" },
+    { key = "glow",    label = "Glow" },
+    { key = "sound",   label = "Sound" },
+    { key = "alpha",   label = "Alpha" },
+    { key = "load",    label = "Load" },
+    { key = "pos",     label = "Position" },
+}
 
+local _pages = {}
+local _navButtons = {}
+local _currentPageKey = nil
+local _pageHost = nil
+
+-----------------------------------------------------------
+-- Page switching (PeelDamage MenuCore pattern)
+-----------------------------------------------------------
+local function SwitchPage(key)
+    if not _pages[key] then return end
+    if W.CloseAllDropdowns then W.CloseAllDropdowns() end
+
+    if _currentPageKey and _pages[_currentPageKey] and _pages[_currentPageKey].frame then
+        _pages[_currentPageKey].frame:Hide()
+    end
+    for _, btn in pairs(_navButtons) do if btn.SetActive then btn:SetActive(false) end end
+
+    if not _pages[key].frame then
+        if _pages[key].build then
+            _pages[key].frame = _pages[key].build(_pageHost)
+            if _pages[key].frame then _pages[key].frame:SetAllPoints(_pageHost) end
+        end
+    end
+
+    if _pages[key].frame then
+        _pages[key].frame:Show()
+        if _pages[key].frame.Refresh then pcall(_pages[key].frame.Refresh, _pages[key].frame) end
+    end
+    if _navButtons[key] then _navButtons[key]:SetActive(true) end
+    _currentPageKey = key
+end
+
+-----------------------------------------------------------
+-- Shared helpers for page builders
+-----------------------------------------------------------
+local function GetSel()
+    local key = MSWA.selectedSpellID; if not key then return nil end
+    return select(1, MSWA_GetSpellSettings(MSWA_GetDB(), key)) or nil
+end
+local function EnsureSel()
+    local key = MSWA.selectedSpellID; if not key then return nil end
+    return select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
+end
+local function GetSelKey() return MSWA.selectedSpellID end
+
+-----------------------------------------------------------
+-- Detail panel update (v2 — delegates to active page)
+-----------------------------------------------------------
 MSWA_UpdateDetailPanel = function()
-    local f = MSWA.optionsFrame
-    if not f then return end
-
+    local f = MSWA.optionsFrame; if not f then return end
     local key = MSWA.selectedSpellID
     local gid = MSWA.selectedGroupID
 
-    -- Group state
+    -- Group selected
     if gid and not key then
-        local db = MSWA_GetDB()
-        local g = (db.groups or {})[gid]
+        local db = MSWA_GetDB(); local g = (db.groups or {})[gid]
         if not g then MSWA.selectedGroupID = nil
         else
             if f.rightTitle then f.rightTitle:SetText(g.name or "Group") end
-            if f.generalPanel then f.generalPanel:Hide() end
-            if f.displayPanel then f.displayPanel:Hide() end
-            if f.altPanel then f.altPanel:Hide() end
-            if f.glowPanel2 then f.glowPanel2:Hide() end
+            if f.groupPanel then f.groupPanel:Show(); if f.groupPanel.Sync then f.groupPanel:Sync() end end
+            if _pageHost then _pageHost:Hide() end
+            if f.navRail then f.navRail:Hide() end
             if f.emptyPanel then f.emptyPanel:Hide() end
-            if f.groupPanel then f.groupPanel:Hide() end
-            if f.groupPanel then f.groupPanel:Show() end
-            if f.tabGeneral then f.tabGeneral:Disable() end
-            if f.tabDisplay then f.tabDisplay:Disable() end
-            if f.tabGlow then f.tabGlow:Disable() end
-            if f.tabImport then f.tabImport:Disable() end
-            if f.groupPanel and f.groupPanel.Sync then f.groupPanel:Sync() end
             return
         end
     end
 
-    -- Empty state
+    -- Nothing selected
     if not key then
         if f.rightTitle then f.rightTitle:SetText("Select an Aura") end
-        if f.generalPanel then f.generalPanel:Hide() end
-        if f.displayPanel then f.displayPanel:Hide() end
-        if f.altPanel then f.altPanel:Hide() end
-        if f.glowPanel2 then f.glowPanel2:Hide() end
-        if f.emptyPanel then f.emptyPanel:Show() end
         if f.groupPanel then f.groupPanel:Hide() end
-        if f.tabGeneral then f.tabGeneral:Disable() end
-        if f.tabDisplay then f.tabDisplay:Disable() end
-        if f.tabGlow then f.tabGlow:Disable() end
-        if f.tabImport then f.tabImport:Disable() end
+        if _pageHost then _pageHost:Hide() end
+        if f.navRail then f.navRail:Hide() end
+        if f.emptyPanel then f.emptyPanel:Show() end
         return
     end
 
-    -- Selected state
+    -- Aura selected
     local name = MSWA_GetDisplayNameForKey(key)
-    local db   = MSWA_GetDB()
-    local s    = select(1, MSWA_GetSpellSettings(db, key)) or {}
-
-    local x = s.x or 0
-    local y = s.y or 0
-    local w = s.width  or MSWA.ICON_SIZE
-    local h = s.height or MSWA.ICON_SIZE
-    local a
-    do
-        -- Show/store the *effective* anchor name:
-        -- If this aura is inside a group, the group is the master anchor.
-        local gid2 = (MSWA_GetAuraGroup and MSWA_GetAuraGroup(key)) or nil
-        if gid2 then
-            local g2 = (db.groups or {})[gid2]
-            a = (g2 and g2.anchorFrame) or ""
-        else
-            a = s.anchorFrame or ""
-        end
-    end
-
     if f.rightTitle then f.rightTitle:SetText(name or "Selected Aura") end
-
-    if f.emptyPanel then f.emptyPanel:Hide() end
     if f.groupPanel then f.groupPanel:Hide() end
-    if f.tabGeneral then f.tabGeneral:Enable() end
-    if f.tabDisplay then f.tabDisplay:Enable() end
-    if f.tabGlow then f.tabGlow:Enable() end
-    if f.tabImport then f.tabImport:Enable() end
+    if f.emptyPanel then f.emptyPanel:Hide() end
+    if f.navRail then f.navRail:Show() end
+    if _pageHost then _pageHost:Show() end
 
-    local tab = f.activeTab or "GENERAL"
-    if tab == "DISPLAY" then
-        if f.generalPanel then f.generalPanel:Hide() end
-        if f.altPanel then f.altPanel:Hide() end
-        if f.glowPanel2 then f.glowPanel2:Hide() end
-        if f.displayPanel then f.displayPanel:Show() end
-    elseif tab == "GLOW" then
-        if f.generalPanel then f.generalPanel:Hide() end
-        if f.displayPanel then f.displayPanel:Hide() end
-        if f.altPanel then f.altPanel:Hide() end
-        if f.glowPanel2 then f.glowPanel2:Show(); if f.glowPanel2.Sync then f.glowPanel2:Sync() end end
-    elseif tab == "IMPORT" then
-        if f.generalPanel then f.generalPanel:Hide() end
-        if f.displayPanel then f.displayPanel:Hide() end
-        if f.glowPanel2 then f.glowPanel2:Hide() end
-        if f.altPanel then f.altPanel:Show(); if f.altPanel.Sync then f.altPanel:Sync() end end
-    else
-        if f.displayPanel then f.displayPanel:Hide() end
-        if f.altPanel then f.altPanel:Hide() end
-        if f.glowPanel2 then f.glowPanel2:Hide() end
-        if f.generalPanel then f.generalPanel:Show() end
-    end
-
-    if f.detailName then
-        local abTag = ""
-        if s and s.auraMode == "AUTOBUFF" then
-            abTag = MSWA_IsItemKey(key) and " |cff44ddff[Buff Timer]|r" or " |cff44ddff[Auto Buff]|r"
-        elseif s and s.auraMode == "BUFF_THEN_CD" then
-            abTag = " |cff44ffaa[Buff -> CD]|r"
-        elseif s and s.auraMode == "REMINDER_BUFF" then
-            abTag = " |cffff6644[Reminder Buff]|r"
-        elseif s and s.auraMode == "CHARGES" then
-            abTag = " |cff44ddff[Charges]|r"
-        elseif s and s.auraMode == "BUFF_AURA" then
-            if s.cdmCooldownID then
-                abTag = " |cff55bbff[CDM Buff]|r"
-            else
-                abTag = " |cff55bbff[Buff Aura]|r"
-            end
-        end
-        if MSWA_IsDraftKey(key) then f.detailName:SetText("New Aura - ???")
-        elseif MSWA_IsItemKey(key) then
-            local itemID = MSWA_KeyToItemID(key) or 0
-            f.detailName:SetText(('Item %d - %s%s'):format(itemID, name or 'Unknown', abTag))
-        elseif type(key) == 'number' then
-            f.detailName:SetText(('Spell %d - %s%s'):format(key, name or 'Unknown', abTag))
-        else
-            f.detailName:SetText((name or 'Unknown') .. abTag)
-        end
-    end
-
-    -- Sync rekey EditBox with current spell/item ID
-    if f.rekeyEdit then
-        local currentID
-        if MSWA_IsItemKey(key) then
-            currentID = MSWA_KeyToItemID(key)
-        elseif MSWA_IsSpellInstanceKey(key) then
-            currentID = MSWA_KeyToSpellID(key)
-        elseif type(key) == "number" then
-            currentID = key
-        end
-        f.rekeyEdit:SetText(currentID and tostring(currentID) or "")
-        -- Hide for drafts
-        local isDraft = MSWA_IsDraftKey(key)
-        f.rekeyLabel:SetShown(not isDraft)
-        f.rekeyEdit:SetShown(not isDraft)
-        f.rekeyBtn:SetShown(not isDraft)
-        f.rekeyHint:SetShown(not isDraft)
-        -- Re-anchor addLabel: below rekey when visible, below detailName when hidden
-        if f.addLabel then
-            f.addLabel:ClearAllPoints()
-            if isDraft then
-                f.addLabel:SetPoint("TOPLEFT", f.detailName, "BOTTOMLEFT", 0, -10)
-            else
-                f.addLabel:SetPoint("TOPLEFT", f.rekeyHint, "BOTTOMLEFT", 0, -10)
-            end
-        end
-    end
-
-    if f.detailX then f.detailX:SetText(("%d"):format(x)) end
-    if f.detailY then f.detailY:SetText(("%d"):format(y)) end
-    if f.detailW then f.detailW:SetText(("%d"):format(w)) end
-    if f.detailH then f.detailH:SetText(("%d"):format(h)) end
-    if f.detailA then f.detailA:SetText(a) end
-
-    -- Sync custom icon
-    if f.customIconEdit then
-        local cid = (s and s.customIconID) or nil
-        if cid and tonumber(cid) and tonumber(cid) > 0 then
-            f.customIconEdit:SetText(tostring(cid))
-            if f.customIconPreview then f.customIconPreview:SetTexture(tonumber(cid)); f.customIconPreview:Show() end
-        else
-            f.customIconEdit:SetText("")
-            if f.customIconPreview then f.customIconPreview:Hide() end
-        end
-    end
-
-    if f.textSizeEdit then
-        local size = (s and s.textFontSize) or db.textFontSize or 12
-        size = tonumber(size) or 12
-        if size < 6 then size = 6 end; if size > 48 then size = 48 end
-        f.textSizeEdit:SetText(tostring(size))
-    end
-    if f.textPosDrop and UIDropDownMenu_SetText then
-        local point = (s and s.textPoint) or db.textPoint or "BOTTOMRIGHT"
-        UIDropDownMenu_SetText(f.textPosDrop, MSWA_GetTextPosLabel(point))
-    end
-    if f.textColorSwatch then
-        local tc = (s and s.textColor) or db.textColor or { r = 1, g = 1, b = 1 }
-        f.textColorSwatch:SetColorTexture(tonumber(tc.r) or 1, tonumber(tc.g) or 1, tonumber(tc.b) or 1, 1)
-    end
-    if f.fontDrop then MSWA_InitFontDropdown() end
-    if f.activeTab == "IMPORT" and f.altPanel and f.altPanel.Sync then f.altPanel:Sync() end
-    if f.grayCooldownCheck then
-        f.grayCooldownCheck:SetChecked((s and s.grayOnCooldown) and true or false)
-    end
-    if f.grayZeroCountCheck then
-        f.grayZeroCountCheck:SetChecked((s and s.showOnZeroCount) and true or false)
-    end
-    if f.swipeDarkenCheck then
-        -- "Swipe darkens on loss" == reverse swipe direction.
-        f.swipeDarkenCheck:SetChecked((s and s.swipeDarken) and true or false)
-    end
-    if f.showDecimalCheck then
-        f.showDecimalCheck:SetChecked((s and s.showDecimal) and true or false)
-    end
-
-    -- Sync Sound dropdowns
-    if f.sndStartDrop and UIDropDownMenu_SetText then
-        local sk = (s and s.soundOnStart) or "NONE"
-        local label = "-- None --"
-        for _, entry in ipairs(MSWA_GetSoundChoices()) do
-            if entry.key == sk then label = entry.label; break end
-        end
-        UIDropDownMenu_SetSelectedValue(f.sndStartDrop, sk)
-        UIDropDownMenu_SetText(f.sndStartDrop, label)
-    end
-    if f.sndReadyDrop and UIDropDownMenu_SetText then
-        local sk = (s and s.soundOnReady) or "NONE"
-        local label = "-- None --"
-        for _, entry in ipairs(MSWA_GetSoundChoices()) do
-            if entry.key == sk then label = entry.label; break end
-        end
-        UIDropDownMenu_SetSelectedValue(f.sndReadyDrop, sk)
-        UIDropDownMenu_SetText(f.sndReadyDrop, label)
-    end
-    if f.sndChannelDrop and UIDropDownMenu_SetText then
-        local ch = (s and s.soundChannel) or "Master"
-        local label = "Master"
-        for _, entry in ipairs(MSWA_GetSoundChannels()) do
-            if entry.key == ch then label = entry.label; break end
-        end
-        UIDropDownMenu_SetSelectedValue(f.sndChannelDrop, ch)
-        UIDropDownMenu_SetText(f.sndChannelDrop, label)
-    end
-
-    -- Sync Display Type dropdown + bar settings
-    if f.displayTypeDrop then
-        local dt = (s and s.displayType == "BAR") and "BAR" or "ICON"
-        f._displayTypeVal = dt
-        UIDropDownMenu_SetSelectedValue(f.displayTypeDrop, dt)
-        UIDropDownMenu_SetText(f.displayTypeDrop, dt == "BAR" and "Progress Bar" or "Icon")
-
-        local isBar = (dt == "BAR")
-        if f._barSettingsFrame then f._barSettingsFrame:SetShown(isBar) end
-
-        -- Reanchor separator + labelX based on bar visibility
-        if f._displayTypeSep then
-            f._displayTypeSep:ClearAllPoints()
-            if isBar then
-                f._displayTypeSep:SetPoint("TOPLEFT", f._barSettingsFrame, "BOTTOMLEFT", 0, -6)
-            else
-                f._displayTypeSep:SetPoint("TOPLEFT", f.displayTypeDrop, "BOTTOMLEFT", 16, -6)
-            end
-        end
-        if f._labelX then
-            f._labelX:ClearAllPoints()
-            f._labelX:SetPoint("TOPLEFT", f._displayTypeSep, "BOTTOMLEFT", 0, -8)
-        end
-
-        if isBar and s then
-            if f.barNameEdit then
-                local cn = (db.customNames and db.customNames[key]) or ""
-                if cn == "" then
-                    -- Show auto-resolved name as placeholder
-                    local numKey = tonumber(key)
-                    local autoName
-                    if numKey then
-                        autoName = MSWA_GetSpellName and MSWA_GetSpellName(numKey)
-                    else
-                        local keyStr = tostring(key)
-                        local sid = keyStr:match("^spell:(%d+)")
-                        if sid then autoName = MSWA_GetSpellName and MSWA_GetSpellName(tonumber(sid)) end
-                        if not autoName then
-                            local iid = keyStr:match("^item:(%d+)")
-                            if iid and C_Item and C_Item.GetItemNameByID then autoName = C_Item.GetItemNameByID(tonumber(iid)) end
-                        end
-                    end
-                    f.barNameEdit:SetText(autoName or "")
-                else
-                    f.barNameEdit:SetText(cn)
-                end
-            end
-            if f.barWidthEdit then f.barWidthEdit:SetText(tostring(s.barWidth or 200)) end
-            if f.barHeightEdit then f.barHeightEdit:SetText(tostring(s.barHeight or 22)) end
-            if f.barFontEdit then f.barFontEdit:SetText(tostring(s.barFontSize or s.textFontSize or db.textFontSize or 12)) end
-            if f.barShowNameCheck then f.barShowNameCheck:SetChecked(s.barShowName ~= false) end
-            if f.barShowTimerCheck then f.barShowTimerCheck:SetChecked(s.barShowTimer ~= false) end
-            if f.barShowSparkCheck then f.barShowSparkCheck:SetChecked(s.barShowSpark ~= false) end
-            if f.barColorSwatch then
-                local bc = s.barColor or { r = 0.9, g = 0.7, b = 0.0 }
-                f.barColorSwatch:SetColorTexture(bc.r or 0.9, bc.g or 0.7, bc.b or 0.0, 1)
-            end
-            -- Show Icon + position
-            local showIcon = (s.barShowIcon ~= false)
-            if f.barShowIconCheck then f.barShowIconCheck:SetChecked(showIcon) end
-            if f.barIconPosLabel then f.barIconPosLabel:SetShown(showIcon) end
-            if f.barIconPosDrop then
-                f.barIconPosDrop:SetShown(showIcon)
-                local pos = s.barIconPos or "LEFT"
-                UIDropDownMenu_SetSelectedValue(f.barIconPosDrop, pos)
-                local posLabels = { LEFT = "Left", RIGHT = "Right", TOP = "Top", BOTTOM = "Bottom" }
-                UIDropDownMenu_SetText(f.barIconPosDrop, posLabels[pos] or "Left")
-            end
-            -- Fill Direction
-            if f.barFillDirDrop then
-                local fd = s.barFillDir or "LR"
-                UIDropDownMenu_SetSelectedValue(f.barFillDirDrop, fd)
-                local fdLabels = {
-                    LR = "Left \226\134\146 Right",
-                    RL = "Right \226\134\146 Left",
-                    BT = "Bottom \226\134\146 Top  (vertical)",
-                    TB = "Top \226\134\146 Bottom  (vertical)",
-                }
-                UIDropDownMenu_SetText(f.barFillDirDrop, fdLabels[fd] or fdLabels["LR"])
-            end
-            -- Bar Texture
-            if f.barTextureEdit then f.barTextureEdit:SetText(s.barTexture or "") end
-        end
-    end
-
-    -- Sync alpha sliders
-    if f.cdAlphaSlider then
-        local v = (s and tonumber(s.cdAlpha)) or 1.0
-        f.cdAlphaSlider:SetValue(math.floor(v * 100 + 0.5))
-    end
-    if f.oocAlphaSlider then
-        local v = (s and tonumber(s.oocAlpha)) or 1.0
-        f.oocAlphaSlider:SetValue(math.floor(v * 100 + 0.5))
-    end
-    if f.combatAlphaSlider then
-        local v = (s and tonumber(s.combatAlpha)) or 1.0
-        f.combatAlphaSlider:SetValue(math.floor(v * 100 + 0.5))
-    end
-    if f.readyAlphaSlider then
-        local v = (s and tonumber(s.readyAlpha)) or 1.0
-        f.readyAlphaSlider:SetValue(math.floor(v * 100 + 0.5))
-    end
-
-    -- Sync conditional 2nd text color controls
-    -- Timer-based text color works for AUTOBUFF / BUFF_THEN_CD / REMINDER_BUFF (we compute remaining ourselves)
-    local isAutoBuff = s and (s.auraMode == "AUTOBUFF" or s.auraMode == "BUFF_THEN_CD" or s.auraMode == "REMINDER_BUFF" or s.auraMode == "CHARGES" or s.auraMode == "BUFF_AURA")
-    if f.tc2Check then
-        local canUseTC2 = isAutoBuff
-        f.tc2Check:SetShown(canUseTC2)
-        if f.tc2Label then f.tc2Label:SetShown(canUseTC2) end
-        if f.tc2ColorLabel then f.tc2ColorLabel:SetShown(canUseTC2) end
-        if f.tc2ColorBtn then f.tc2ColorBtn:SetShown(canUseTC2) end
-        if f.tc2CondLabel then f.tc2CondLabel:SetShown(canUseTC2) end
-        if f.tc2CondButton then f.tc2CondButton:SetShown(canUseTC2) end
-        if f.tc2ValueEdit then f.tc2ValueEdit:SetShown(canUseTC2) end
-        if f.tc2ValueLabel then f.tc2ValueLabel:SetShown(canUseTC2) end
-
-        if canUseTC2 then
-            local tc2en = (s and s.textColor2Enabled) and true or false
-            f.tc2Check:SetChecked(tc2en)
-        -- Color swatch
-        if f.tc2ColorSwatch then
-            local tc2 = (s and s.textColor2) or { r = 1, g = 0.2, b = 0.2 }
-            f.tc2ColorSwatch:SetColorTexture(tonumber(tc2.r) or 1, tonumber(tc2.g) or 0.2, tonumber(tc2.b) or 0.2, 1)
-        end
-        -- Condition text
-        local cond = (s and s.textColor2Cond) or "TIMER_BELOW"
-        if f.tc2CondButton then
-            if cond == "TIMER_ABOVE" then
-                f.tc2CondButton:SetText("Timer >= X")
-            else
-                f.tc2CondButton:SetText("Timer <= X")
-            end
-        end
-        -- Value
-        if f.tc2ValueEdit then
-            f.tc2ValueEdit:SetText(tostring((s and s.textColor2Value) or 5))
-        end
-        -- Enable/disable sub-controls
-        local enSub = tc2en
-        if f.tc2ColorBtn then f.tc2ColorBtn[enSub and "Enable" or "Disable"](f.tc2ColorBtn) end
-        if f.tc2CondButton then f.tc2CondButton[enSub and "Enable" or "Disable"](f.tc2CondButton) end
-        if f.tc2ValueEdit then f.tc2ValueEdit[enSub and "Enable" or "Disable"](f.tc2ValueEdit) end
-        if f.tc2ColorLabel then f.tc2ColorLabel:SetAlpha(enSub and 1 or 0.4) end
-        if f.tc2CondLabel then f.tc2CondLabel:SetAlpha(enSub and 1 or 0.4) end
-        if f.tc2ValueLabel then f.tc2ValueLabel:SetAlpha(enSub and 1 or 0.4) end
-        end -- canUseTC2
-    end
-
-    -- Sync Stack controls
-    if f.stackShowMode then
-        local mode = (s and s.stackShowMode) or "auto"
-        local stackShowLabels2 = { auto = "Auto", show = "Force Show", hide = "Force Hide" }
-        f.stackShowMode:SetText(stackShowLabels2[mode] or "Auto")
-    end
-    if f.hideStacksOnCDCheck then
-        f.hideStacksOnCDCheck:SetChecked(s and s.hideStacksOnCooldown or false)
-    end
-    if f.stackSizeEdit then
-        local sz = (s and s.stackFontSize) or 12
-        sz = tonumber(sz) or 12; if sz < 6 then sz = 6 end; if sz > 48 then sz = 48 end
-        f.stackSizeEdit:SetText(tostring(sz))
-    end
-    if f.stackPosDrop and UIDropDownMenu_SetText then
-        local point = (s and s.stackPoint) or "BOTTOMRIGHT"
-        UIDropDownMenu_SetText(f.stackPosDrop, MSWA_GetTextPosLabel(point))
-    end
-    if f.stackColorSwatch then
-        local tc = (s and s.stackColor) or { r = 1, g = 1, b = 1 }
-        f.stackColorSwatch:SetColorTexture(tonumber(tc.r) or 1, tonumber(tc.g) or 1, tonumber(tc.b) or 1, 1)
-    end
-    if f.stackOffXEdit then
-        f.stackOffXEdit:SetText(tostring((s and s.stackOffsetX) or 0))
-    end
-    if f.stackOffYEdit then
-        f.stackOffYEdit:SetText(tostring((s and s.stackOffsetY) or 0))
-    end
-    if f.stackFontDrop and f._initStackFontDrop then
-        f._initStackFontDrop()
-    end
-
-    -- Sync Charge Tracker controls
-    if f.chargeMaxEdit then
-        f.chargeMaxEdit:SetText(tostring((s and s.chargeMax) or 3))
-    end
-    if f.chargeDurEdit then
-        f.chargeDurEdit:SetText(tostring((s and s.chargeDuration) or 0))
-    end
-    if f.chargeSizeEdit then
-        local csz = (s and s.chargeFontSize) or 12
-        csz = tonumber(csz) or 12; if csz < 6 then csz = 6 end; if csz > 48 then csz = 48 end
-        f.chargeSizeEdit:SetText(tostring(csz))
-    end
-    if f.chargePosDrop and UIDropDownMenu_SetText then
-        local cpt = (s and s.chargePoint) or "BOTTOMRIGHT"
-        UIDropDownMenu_SetText(f.chargePosDrop, MSWA_GetTextPosLabel(cpt))
-    end
-    if f.chargeColorSwatch then
-        local cc = (s and s.chargeColor) or { r = 1, g = 1, b = 1 }
-        f.chargeColorSwatch:SetColorTexture(tonumber(cc.r) or 1, tonumber(cc.g) or 1, tonumber(cc.b) or 1, 1)
-    end
-    if f.chargeOffXEdit then
-        f.chargeOffXEdit:SetText(tostring((s and s.chargeOffsetX) or 0))
-    end
-    if f.chargeOffYEdit then
-        f.chargeOffYEdit:SetText(tostring((s and s.chargeOffsetY) or 0))
-    end
-
-    -- Sync Auto Buff controls
-    if f.autoBuffCheck then
-        local isAutoBuff = (s and s.auraMode == "AUTOBUFF") and true or false
-        local isBuffThenCD = (s and s.auraMode == "BUFF_THEN_CD") and true or false
-        local isReminderBuff = (s and s.auraMode == "REMINDER_BUFF") and true or false
-        local isCharges = (s and s.auraMode == "CHARGES") and true or false
-        local hasBuffMode = isAutoBuff or isBuffThenCD or isReminderBuff
-        local isSpellKey = MSWA_IsSpellKey(key)
-        local isItemKey  = MSWA_IsItemKey(key)
-        local isDraft    = MSWA_IsDraftKey(key)
-
-        if isSpellKey or isItemKey then
-            f.autoBuffCheck:Show(); f.autoBuffLabel:Show()
-            f.autoBuffCheck:SetChecked(isAutoBuff)
-            -- Contextual label
-            if isItemKey then
-                f.autoBuffLabel:SetText("|cffffcc00Buff Timer mode|r  (show icon + countdown when used)")
-            else
-                f.autoBuffLabel:SetText("|cffffcc00Auto Buff mode|r  (show icon only while buff is active)")
-            end
-        else
-            f.autoBuffCheck:Hide(); f.autoBuffLabel:Hide()
-        end
-
-        -- Buff -> Cooldown checkbox
-        if f.buffThenCDCheck then
-            if isSpellKey or isItemKey then
-                f.buffThenCDCheck:Show(); f.buffThenCDLabel:Show()
-                f.buffThenCDCheck:SetChecked(isBuffThenCD)
-            else
-                f.buffThenCDCheck:Hide(); f.buffThenCDLabel:Hide()
-            end
-        end
-
-        -- Reminder Buff checkbox
-        if f.reminderBuffCheck then
-            if isSpellKey or isItemKey then
-                f.reminderBuffCheck:Show(); f.reminderBuffLabel:Show()
-                f.reminderBuffCheck:SetChecked(isReminderBuff)
-            else
-                f.reminderBuffCheck:Hide(); f.reminderBuffLabel:Hide()
-            end
-        end
-
-        -- Show duration / delay / haste for ANY key with buff mode
-        if f.buffDurLabel then f.buffDurLabel:SetShown(hasBuffMode) end
-        if f.buffDurEdit then
-            f.buffDurEdit:SetShown(hasBuffMode)
-            if hasBuffMode then
-                local dur = (s and s.autoBuffDuration) or (isReminderBuff and 3600 or 10)
-                dur = math.floor(tonumber(dur) * 1000 + 0.5) / 1000
-                f.buffDurEdit:SetText(tostring(dur))
-            end
-        end
-        -- Buff delay
-        if f.buffDelayLabel then f.buffDelayLabel:SetShown(hasBuffMode) end
-        if f.buffDelayEdit then
-            f.buffDelayEdit:SetShown(hasBuffMode)
-            if hasBuffMode then
-                local d = (s and s.autoBuffDelay) or 0
-                d = math.floor(tonumber(d) * 1000 + 0.5) / 1000
-                f.buffDelayEdit:SetText(tostring(d))
-            end
-        end
-        -- Haste scaling toggle (only visible for buff modes)
-        if f.hasteScaleCheck then
-            f.hasteScaleCheck:SetShown(hasBuffMode)
-            f.hasteScaleLabel:SetShown(hasBuffMode)
-            if hasBuffMode then
-                f.hasteScaleCheck:SetChecked((s and s.hasteScaling) and true or false)
-            end
-        end
-
-        -- Reminder-specific settings (only visible when REMINDER_BUFF)
-        local showReminder = isReminderBuff
-        if f.reminderPersistDeathCheck then
-            f.reminderPersistDeathCheck:SetShown(showReminder)
-            f.reminderPersistDeathLabel:SetShown(showReminder)
-            if showReminder then
-                f.reminderPersistDeathCheck:SetChecked((s and s.reminderPersistDeath) and true or false)
-            end
-        end
-        if f.reminderShowTimerCheck then
-            f.reminderShowTimerCheck:SetShown(showReminder)
-            f.reminderShowTimerLabel:SetShown(showReminder)
-            if showReminder then
-                f.reminderShowTimerCheck:SetChecked((s and s.reminderShowTimer) and true or false)
-            end
-        end
-        if f.reminderTextLabel then f.reminderTextLabel:SetShown(showReminder) end
-        if f.reminderTextEdit then
-            f.reminderTextEdit:SetShown(showReminder)
-            if showReminder then
-                f.reminderTextEdit:SetText((s and s.reminderText) or "MISSING!")
-            end
-        end
-        if f.reminderFontSizeLabel then f.reminderFontSizeLabel:SetShown(showReminder) end
-        if f.reminderFontSizeEdit then
-            f.reminderFontSizeEdit:SetShown(showReminder)
-            if showReminder then
-                f.reminderFontSizeEdit:SetText(tostring((s and s.reminderFontSize) or 12))
-            end
-        end
-        if f.reminderColorLabel then f.reminderColorLabel:SetShown(showReminder) end
-        for ci = 1, 4 do
-            local cb = f["reminderColor" .. ci]
-            if cb then cb:SetShown(showReminder) end
-        end
-
-        -- Charges checkbox
-        local isCharges = (s and s.auraMode == "CHARGES") and true or false
-        if f.chargesCheck then
-            if isSpellKey or isItemKey then
-                f.chargesCheck:Show(); f.chargesLabel:Show()
-                f.chargesCheck:SetChecked(isCharges)
-            else
-                f.chargesCheck:Hide(); f.chargesLabel:Hide()
-            end
-        end
-
-        -- Buff Aura checkbox
-        local isBuffAura = (s and s.auraMode == "BUFF_AURA") and true or false
-        if f.buffAuraCheck then
-            if isSpellKey or isItemKey then
-                f.buffAuraCheck:Show(); f.buffAuraLabel:Show()
-                f.buffAuraCheck:SetChecked(isBuffAura)
-            else
-                f.buffAuraCheck:Hide(); f.buffAuraLabel:Hide()
-            end
-        end
-        -- BUFF_AURA sub-options visibility
-        local showBuffAuraSub = isBuffAura and (isSpellKey or isItemKey)
-        if f.buffAuraAbsentCheck then
-            f.buffAuraAbsentCheck:SetShown(showBuffAuraSub)
-            f.buffAuraAbsentLabel:SetShown(showBuffAuraSub)
-            if showBuffAuraSub and s then f.buffAuraAbsentCheck:SetChecked(s.showWhenAbsent and true or false) end
-        end
-        if f.buffAuraDesatCheck then
-            f.buffAuraDesatCheck:SetShown(showBuffAuraSub)
-            f.buffAuraDesatLabel:SetShown(showBuffAuraSub)
-            if showBuffAuraSub and s then f.buffAuraDesatCheck:SetChecked(s.desaturateOnAbsent ~= false) end
-        end
-        if f.buffAuraStacksCheck then
-            f.buffAuraStacksCheck:SetShown(showBuffAuraSub)
-            f.buffAuraStacksLabel:SetShown(showBuffAuraSub)
-            if showBuffAuraSub and s then f.buffAuraStacksCheck:SetChecked(s.showStacks ~= false) end
-        end
-        if f.buffAuraAlphaLabel then
-            f.buffAuraAlphaLabel:SetShown(showBuffAuraSub)
-            f.buffAuraAlphaEdit:SetShown(showBuffAuraSub)
-            if showBuffAuraSub and s then f.buffAuraAlphaEdit:SetText(tostring(s.alphaOnAbsent or 0.45)) end
-        end
-        if f.buffAuraSpellIDLabel then
-            f.buffAuraSpellIDLabel:SetShown(showBuffAuraSub)
-            if showBuffAuraSub and s then
-                local sid = s.auraSpellID
-                local unit = s.auraUnit or "player"
-                local cdmID = s.cdmCooldownID
-                if sid and cdmID then
-                    f.buffAuraSpellIDLabel:SetText("|cff888888Tracking: spell " .. sid .. " on " .. unit .. " (CDM:" .. tostring(cdmID) .. ")|r")
-                elseif sid then
-                    f.buffAuraSpellIDLabel:SetText("|cff888888Tracking: spell " .. sid .. " on " .. unit .. "|r")
-                else
-                    f.buffAuraSpellIDLabel:SetText("|cffff4444No auraSpellID set - enter spell ID above|r")
-                end
-            end
-        end
-        -- Reminder threshold controls
-        if f.reminderThreshLabel then
-            f.reminderThreshLabel:SetShown(showBuffAuraSub)
-            f.reminderThreshEdit:SetShown(showBuffAuraSub)
-            f.reminderThreshUnit:SetShown(showBuffAuraSub)
-            f.reminderThreshHint:SetShown(showBuffAuraSub)
-            if showBuffAuraSub and s then
-                local tv = s.reminderThresholdMin
-                f.reminderThreshEdit:SetText(tv and tostring(tv) or "")
-            end
-        end
-
-        -- Dynamic re-anchoring: collapse gaps when sub-sections are hidden
-        -- Reminder checkbox: anchor to hasteScale (visible) or buffThenCD (hidden)
-        if f.reminderBuffCheck then
-            f.reminderBuffCheck:ClearAllPoints()
-            if hasBuffMode and f.hasteScaleCheck then
-                f.reminderBuffCheck:SetPoint("TOPLEFT", f.hasteScaleCheck, "BOTTOMLEFT", 0, -6)
-            elseif f.buffThenCDCheck and f.buffThenCDCheck:IsShown() then
-                f.reminderBuffCheck:SetPoint("TOPLEFT", f.buffThenCDCheck, "BOTTOMLEFT", 0, -6)
-            elseif f.autoBuffCheck and f.autoBuffCheck:IsShown() then
-                f.reminderBuffCheck:SetPoint("TOPLEFT", f.autoBuffCheck, "BOTTOMLEFT", 0, -6)
-            else
-                f.reminderBuffCheck:SetPoint("TOPLEFT", f.dropZone, "BOTTOMLEFT", -4, -8)
-            end
-        end
-        -- Charges checkbox: anchor to reminder sub-settings (visible) or reminderBuff (hidden)
-        if f.chargesCheck then
-            f.chargesCheck:ClearAllPoints()
-            if showReminder and f.reminderColorLabel then
-                f.chargesCheck:SetPoint("TOPLEFT", f.reminderColorLabel, "BOTTOMLEFT", -22, -10)
-            elseif f.reminderBuffCheck and f.reminderBuffCheck:IsShown() then
-                f.chargesCheck:SetPoint("TOPLEFT", f.reminderBuffCheck, "BOTTOMLEFT", 0, -6)
-            elseif f.buffThenCDCheck and f.buffThenCDCheck:IsShown() then
-                f.chargesCheck:SetPoint("TOPLEFT", f.buffThenCDCheck, "BOTTOMLEFT", 0, -6)
-            else
-                f.chargesCheck:SetPoint("TOPLEFT", f.dropZone, "BOTTOMLEFT", -4, -8)
-            end
-        end
-        -- Buff Aura checkbox: anchor to charges
-        if f.buffAuraCheck then
-            f.buffAuraCheck:ClearAllPoints()
-            if f.chargesCheck and f.chargesCheck:IsShown() then
-                f.buffAuraCheck:SetPoint("TOPLEFT", f.chargesCheck, "BOTTOMLEFT", 0, -6)
-            elseif f.reminderBuffCheck and f.reminderBuffCheck:IsShown() then
-                f.buffAuraCheck:SetPoint("TOPLEFT", f.reminderBuffCheck, "BOTTOMLEFT", 0, -6)
-            else
-                f.buffAuraCheck:SetPoint("TOPLEFT", f.dropZone, "BOTTOMLEFT", -4, -8)
-            end
-        end
-        -- Anchor label: anchor to buffAuraCheck sub-options (visible) or chargesCheck or prev visible
-        if f._anchorLabel then
-            f._anchorLabel:ClearAllPoints()
-            if showBuffAuraSub and f.reminderThreshHint then
-                f._anchorLabel:SetPoint("TOPLEFT", f.reminderThreshHint, "BOTTOMLEFT", -22, -10)
-            elseif f.buffAuraCheck and f.buffAuraCheck:IsShown() then
-                f._anchorLabel:SetPoint("TOPLEFT", f.buffAuraCheck, "BOTTOMLEFT", 0, -10)
-            elseif f.chargesCheck and f.chargesCheck:IsShown() then
-                f._anchorLabel:SetPoint("TOPLEFT", f.chargesCheck, "BOTTOMLEFT", 0, -10)
-            elseif f.reminderBuffCheck and f.reminderBuffCheck:IsShown() then
-                f._anchorLabel:SetPoint("TOPLEFT", f.reminderBuffCheck, "BOTTOMLEFT", 0, -10)
-            else
-                f._anchorLabel:SetPoint("TOPLEFT", f.dropZone, "BOTTOMLEFT", -4, -8)
-            end
+    -- Refresh current page
+    if _currentPageKey and _pages[_currentPageKey] and _pages[_currentPageKey].frame then
+        if _pages[_currentPageKey].frame.Refresh then
+            pcall(_pages[_currentPageKey].frame.Refresh, _pages[_currentPageKey].frame)
         end
     end
 end
 
 -----------------------------------------------------------
--- Font dropdown init
+-- Font helpers (preserved from original)
 -----------------------------------------------------------
+local BUILTIN_FONT_PATHS = {}
+do
+    local p = "Fonts\\"
+    BUILTIN_FONT_PATHS["DEFAULT"] = p .. "FRIZQT__.TTF"
+    BUILTIN_FONT_PATHS["FRIZQT"] = p .. "FRIZQT__.TTF"
+    BUILTIN_FONT_PATHS["ARIALN"] = p .. "ARIALN.TTF"
+    BUILTIN_FONT_PATHS["MORPHEUS"] = p .. "MORPHEUS.TTF"
+    BUILTIN_FONT_PATHS["SKURRI"] = p .. "SKURRI.TTF"
+end
 
-function MSWA_InitFontDropdown()
-    local f = MSWA.optionsFrame
-    if not f or not f.fontDrop then return end
-    if not MSWA.fontChoices then MSWA_RebuildFontChoices() end
+function MSWA_GetFontPathFromKey(key)
+    if not key or key == "DEFAULT" then return BUILTIN_FONT_PATHS["DEFAULT"] end
+    if BUILTIN_FONT_PATHS[key] then return BUILTIN_FONT_PATHS[key] end
+    local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+    if LSM then
+        local p = LSM:Fetch("font", key, true)
+        if p then return p end
+    end
+    return BUILTIN_FONT_PATHS["DEFAULT"]
+end
 
-    -- Build lookup table
-    if not MSWA.fontLookup then
-        MSWA.fontLookup = {}
-        for _, data in ipairs(MSWA.fontChoices or {}) do
-            MSWA.fontLookup[data.key] = data.path
+function MSWA_RebuildFontChoices()
+    MSWA.fontChoices = {{ key = "DEFAULT", label = "Default (Blizzard)" }}
+    for k, _ in pairs(BUILTIN_FONT_PATHS) do
+        if k ~= "DEFAULT" then tinsert(MSWA.fontChoices, { key = k, label = k }) end
+    end
+    local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+    if LSM then
+        for _, name in ipairs(LSM:List("font") or {}) do
+            if not BUILTIN_FONT_PATHS[name] then
+                tinsert(MSWA.fontChoices, { key = name, label = name })
+            end
         end
     end
+end
 
-    if not f._mswaFontDropInitialized then
-        if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.fontDrop, 180) end
+local function GetTextPosLabel(pt)
+    local labels = { BOTTOMRIGHT="Bottom Right", BOTTOMLEFT="Bottom Left", TOPRIGHT="Top Right", TOPLEFT="Top Left", CENTER="Center" }
+    return labels[pt] or pt
+end
+MSWA_GetTextPosLabel = GetTextPosLabel
 
-        UIDropDownMenu_Initialize(f.fontDrop, function(self, level)
-            level = level or 1
-            local db = MSWA_GetDB()
-            local auraKey = MSWA.selectedSpellID
-            local s2 = nil
-            if auraKey and db and db.spellSettings then
-                s2 = db.spellSettings[auraKey]
-                if not s2 and type(auraKey) ~= "string" then s2 = db.spellSettings[tostring(auraKey)] end
+function MSWA_ApplyUIFont() end -- no-op for now, theme handles fonts
+
+
+-- ═══════════════════════════════════════════════════════
+-- PAGE BUILDERS
+-- Each returns a frame with :Refresh()
+-- ═══════════════════════════════════════════════════════
+
+-----------------------------------------------------------
+-- PAGE: Trigger (Aura Mode + Spell ID + Anchor)
+-----------------------------------------------------------
+local function BuildTriggerPage(host)
+    local f = W.ScrollPage(host)
+    local c = f._content
+
+    W.Title(c, "Trigger", 12, -10)
+    W.MutedLabel(c, "Aura mode, spell/item binding, anchor frame.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+
+    -- Aura Mode Cards (2x3 grid)
+    local modeHeader = W.SectionHeader(c, "Aura Mode", nil, -54)
+    local MODES = {
+        { key = nil,              label = "Cooldown",    desc = "Standard CD tracker" },
+        { key = "AUTOBUFF",       label = "Auto Buff",   desc = "Show while buff active" },
+        { key = "BUFF_THEN_CD",   label = "Buff > CD",   desc = "Buff timer, then CD" },
+        { key = "REMINDER_BUFF",  label = "Reminder",    desc = "Alert when missing" },
+        { key = "CHARGES",        label = "Charges",     desc = "User-defined charges" },
+        { key = "BUFF_AURA",      label = "Buff Aura",   desc = "Pure buff watcher" },
+    }
+    local modeCards = {}
+    local cardW = 155
+    for i, m in ipairs(MODES) do
+        local card = W.ModeCard(c, m.label, m.desc, cardW, 40, function()
+            local key = GetSelKey(); if not key then return end
+            local s = EnsureSel(); if not s then return end
+            local oldMode = s.auraMode
+            s.auraMode = m.key
+            if MSWA._autoBuff then MSWA._autoBuff[key] = nil end
+            -- Mode-specific init
+            if m.key == "AUTOBUFF" or m.key == "BUFF_THEN_CD" then
+                if not s.autoBuffDuration then s.autoBuffDuration = 10 end
+            elseif m.key == "REMINDER_BUFF" then
+                if not s.autoBuffDuration then s.autoBuffDuration = 3600 end
+                if not s.reminderText then s.reminderText = "MISSING!" end
+                if not s.reminderTextColor then s.reminderTextColor = { r = 1, g = 0.2, b = 0.2 } end
+            elseif m.key == "CHARGES" then
+                if not s.chargeMax then s.chargeMax = 3 end
+                if not s.chargeDuration then s.chargeDuration = 0 end
+                MSWA._charges = MSWA._charges or {}
+                MSWA._charges[key] = { remaining = s.chargeMax, rechargeStart = 0 }
+            elseif m.key == "BUFF_AURA" then
+                s.auraUnit = s.auraUnit or "player"
+                if s.showWhenAbsent == nil then s.showWhenAbsent = false end
+                if s.desaturateOnAbsent == nil then s.desaturateOnAbsent = true end
+                if s.alphaOnAbsent == nil then s.alphaOnAbsent = 0.45 end
+                if s.showStacks == nil then s.showStacks = true end
+                local sid = MSWA_KeyToSpellID(key) or MSWA_KeyToItemID(key)
+                if sid then s.auraSpellID = sid; if MSWA_RegisterBuffWatch then MSWA_RegisterBuffWatch(tostring(key), sid, s.auraUnit or "player") end end
             end
-            local currentKey = (s2 and s2.textFontKey) or (db and db.fontKey) or "DEFAULT"
-
-            for _, data in ipairs(MSWA.fontChoices or {}) do
-                local info = UIDropDownMenu_CreateInfo()
-                info.text = data.label or data.key
-                info.value = data.key
-                info.checked = (data.key == currentKey)
-                info.func = function()
-                    local key = MSWA.selectedSpellID
-                    local db2 = MSWA_GetDB()
-                    if key then
-                        db2.spellSettings = db2.spellSettings or {}
-                        local t = db2.spellSettings
-                        local ss = t[key] or t[tostring(key)]
-                        if not ss then ss = {}; t[key] = ss end
-                        if data.key == "DEFAULT" then ss.textFontKey = nil else ss.textFontKey = data.key end
-                    else
-                        -- No aura selected => set global default
-                        db2.fontKey = (data.key == "DEFAULT") and "DEFAULT" or data.key
-                    end
-                    UIDropDownMenu_SetSelectedValue(f.fontDrop, data.key)
-                    UIDropDownMenu_SetText(f.fontDrop, data.label or data.key)
-                    if f.fontPreview and MSWA.fontLookup then
-                        local fontPath = MSWA.fontLookup[data.key]
-                        if data.key == "DEFAULT" or not fontPath then
-                            f.fontPreview:SetFontObject(GameFontNormalSmall)
-                        else f.fontPreview:SetFont(fontPath, 12, "") end
-                    end
-                    MSWA_InvalidateIconCache()
-                end
-                UIDropDownMenu_AddButton(info, level)
-            end
+            -- Unregister buff watch for non-BUFF_AURA modes
+            if m.key ~= "BUFF_AURA" and MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
+            if not m.key and MSWA._charges then MSWA._charges[key] = nil end
+            MSWA_UpdateDetailPanel(); MSWA_RequestUpdateSpells()
         end)
-        f._mswaFontDropInitialized = true
+        local col = ((i - 1) % 2)
+        local row2 = math.floor((i - 1) / 2)
+        card:SetPoint("TOPLEFT", modeHeader, "BOTTOMLEFT", col * (cardW + 6), -10 - row2 * 46)
+        modeCards[i] = card
     end
 
-    local db = MSWA_GetDB()
-    local auraKey = MSWA.selectedSpellID
-    if UIDropDownMenu_EnableDropDown then UIDropDownMenu_EnableDropDown(f.fontDrop) end
+    -- Mode sub-settings (show/hide per mode)
+    local subAnchor = modeCards[5] -- anchor below row 3
 
-    local ss = auraKey and (select(1, MSWA_GetSpellSettings(db, auraKey)) or {}) or nil
-    local fontKey = (ss and ss.textFontKey) or (db and db.fontKey) or "DEFAULT"
-    local label = "Default (Blizzard)"
-    for _, data in ipairs(MSWA.fontChoices or {}) do
-        if data.key == fontKey then label = data.label or data.key; break end
+    -- Buff Duration
+    local buffDurLabel = W.Label(c, "Buff duration (sec):", "TOPLEFT", subAnchor, "BOTTOMLEFT", 0, -14)
+    local buffDurEdit = W.EditBox(c, 70, 22)
+    buffDurEdit:SetPoint("LEFT", buffDurLabel, "RIGHT", 8, 0)
+    buffDurEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local key = GetSelKey(); if not key then return end; local s = EnsureSel()
+        local v = tonumber(self:GetText()); if v and v >= 0.1 then s.autoBuffDuration = math.floor(v * 1000 + 0.5) / 1000 end
+        if MSWA._autoBuff then MSWA._autoBuff[key] = nil end; MSWA_RequestUpdateSpells()
+    end)
+
+    -- Buff Delay
+    local buffDelayLabel = W.Label(c, "Timer restart after (sec):", "TOPLEFT", buffDurLabel, "BOTTOMLEFT", 0, -6)
+    local buffDelayEdit = W.EditBox(c, 70, 22)
+    buffDelayEdit:SetPoint("LEFT", buffDelayLabel, "RIGHT", 8, 0)
+    buffDelayEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local key = GetSelKey(); if not key then return end; local s = EnsureSel()
+        local v = tonumber(self:GetText())
+        if v and v >= 0 then v = math.floor(v * 1000 + 0.5) / 1000; s.autoBuffDelay = (v > 0) and v or nil else s.autoBuffDelay = nil end
+        if MSWA._autoBuff then MSWA._autoBuff[key] = nil end; MSWA_RequestUpdateSpells()
+    end)
+
+    -- Haste Scaling
+    local hasteCheck = W.Checkbox(c, "Haste scaling (duration adjusts to spell haste)", nil, function(v)
+        local s = EnsureSel(); if s then s.hasteScaling = v and true or nil end
+        local key = GetSelKey(); if key and MSWA._autoBuff then MSWA._autoBuff[key] = nil end; MSWA_RequestUpdateSpells()
+    end)
+    hasteCheck:SetPoint("TOPLEFT", buffDelayLabel, "BOTTOMLEFT", 0, -8)
+
+    -- Reminder sub-settings
+    local reminderTextLabel = W.Label(c, "Reminder text:", "TOPLEFT", hasteCheck, "BOTTOMLEFT", 0, -10)
+    local reminderTextEdit = W.EditBox(c, 140, 22)
+    reminderTextEdit:SetPoint("LEFT", reminderTextLabel, "RIGHT", 8, 0)
+    reminderTextEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local s = EnsureSel(); if s then s.reminderText = (self:GetText() ~= "" and self:GetText()) or nil end
+        MSWA_InvalidateIconCache()
+    end)
+
+    -- Buff Aura sub-settings
+    local baAbsentCheck = W.Checkbox(c, "Show when absent (dimmed)", nil, function(v)
+        local s = EnsureSel(); if s then s.showWhenAbsent = v end; MSWA_RequestUpdateSpells()
+    end)
+    baAbsentCheck:SetPoint("TOPLEFT", reminderTextLabel, "BOTTOMLEFT", 0, -10)
+
+    local baDesatCheck = W.Checkbox(c, "Desaturate icon when absent", nil, function(v)
+        local s = EnsureSel(); if s then s.desaturateOnAbsent = v end; MSWA_RequestUpdateSpells()
+    end)
+    baDesatCheck:SetPoint("TOPLEFT", baAbsentCheck, "BOTTOMLEFT", 0, -4)
+
+    local baStacksCheck = W.Checkbox(c, "Show stack count", nil, function(v)
+        local s = EnsureSel(); if s then s.showStacks = v end; MSWA_RequestUpdateSpells()
+    end)
+    baStacksCheck:SetPoint("TOPLEFT", baDesatCheck, "BOTTOMLEFT", 0, -4)
+
+    -- Charge sub-settings
+    local chargeMaxLabel = W.Label(c, "Max charges:", "TOPLEFT", baStacksCheck, "BOTTOMLEFT", 0, -10)
+    local chargeMaxEdit = W.EditBox(c, 50, 22, true)
+    chargeMaxEdit:SetPoint("LEFT", chargeMaxLabel, "RIGHT", 8, 0)
+    chargeMaxEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local s = EnsureSel(); if s then local v = tonumber(self:GetText()); if v and v >= 1 then s.chargeMax = v end end
+        MSWA_RequestUpdateSpells()
+    end)
+
+    local chargeDurLabel = W.Label(c, "Recharge time:", "TOPLEFT", chargeMaxLabel, "BOTTOMLEFT", 0, -6)
+    local chargeDurEdit = W.EditBox(c, 50, 22)
+    chargeDurEdit:SetPoint("LEFT", chargeDurLabel, "RIGHT", 8, 0)
+    chargeDurEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local s = EnsureSel(); if s then local v = tonumber(self:GetText()); if v then s.chargeDuration = v end end
+        MSWA_RequestUpdateSpells()
+    end)
+
+    -- Spell/Item ID section
+    local idHeader = W.SectionHeader(c, "Spell / Item ID", chargeDurLabel, -16)
+    local rekeyLabel = W.Label(c, "ID:", "TOPLEFT", idHeader, "BOTTOMLEFT", 0, -10)
+    local rekeyEdit = W.EditBox(c, 80, 22, true)
+    rekeyEdit:SetPoint("LEFT", rekeyLabel, "RIGHT", 8, 0)
+    local rekeyBtn = W.Button(c, "Change", 70, 22, function()
+        local key = GetSelKey(); if not key then return end
+        local newID = tonumber(rekeyEdit:GetText()); if not newID or newID <= 0 then return end
+        rekeyEdit:ClearFocus()
+        local ok, result = MSWA_RekeyAura(key, newID)
+        if ok then MSWA_InvalidateIconCache(); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
+        else MSWA_Print("Could not change ID: " .. tostring(result)) end
+    end)
+    rekeyBtn:SetPoint("LEFT", rekeyEdit, "RIGHT", 6, 0)
+    W.MutedLabel(c, "Change spell/item ID. All settings preserved.", "TOPLEFT", rekeyLabel, "BOTTOMLEFT", 0, -4)
+
+    -- Anchor section
+    local anchorHeader = W.SectionHeader(c, "Anchor", rekeyBtn, -28)
+    local anchorLabel = W.Label(c, "Frame:", "TOPLEFT", anchorHeader, "BOTTOMLEFT", 0, -10)
+    local anchorEdit = W.EditBox(c, 220, 22)
+    anchorEdit:SetPoint("LEFT", anchorLabel, "RIGHT", 8, 0)
+
+    local function ApplyAnchor()
+        local key = GetSelKey(); if not key then return end; local s = EnsureSel()
+        if s then local v = anchorEdit:GetText():gsub("^%s+",""):gsub("%s+$",""); s.anchorFrame = (v ~= "" and v) or nil end
+        MSWA_RequestUpdateSpells()
     end
-    if UIDropDownMenu_SetSelectedValue then UIDropDownMenu_SetSelectedValue(f.fontDrop, fontKey) end
-    if UIDropDownMenu_SetText then UIDropDownMenu_SetText(f.fontDrop, label) end
-    if f.fontPreview then
-        local p = MSWA_GetFontPathFromKey(fontKey)
-        if p then pcall(f.fontPreview.SetFont, f.fontPreview, p, 12, "") end
+    anchorEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyAnchor() end)
+    anchorEdit:SetScript("OnEditFocusLost", ApplyAnchor)
+
+    local presetCD = W.Button(c, "CD Manager", 100, 22, function() anchorEdit:SetText("CooldownManager"); ApplyAnchor() end)
+    presetCD:SetPoint("TOPLEFT", anchorLabel, "BOTTOMLEFT", 0, -8)
+    local presetMSUF = W.Button(c, "MSUF Player", 100, 22, function() anchorEdit:SetText("MSUF_player"); ApplyAnchor() end)
+    presetMSUF:SetPoint("LEFT", presetCD, "RIGHT", 6, 0)
+    local presetDefault = W.Button(c, "Default", 80, 22, function()
+        local s = EnsureSel(); if s then s.anchorFrame = nil; s.x = 0; s.y = 0 end; MSWA_RequestUpdateSpells(); f:Refresh()
+    end)
+    presetDefault:SetPoint("LEFT", presetMSUF, "RIGHT", 6, 0)
+
+    c:SetHeight(900)
+
+    function f:Refresh()
+        local key = GetSelKey(); if not key then return end
+        local db = MSWA_GetDB(); local s = GetSel() or {}
+        local curMode = s.auraMode
+        for i, m in ipairs(MODES) do modeCards[i]:SetSelected((curMode or "nil") == (m.key or "nil")) end
+
+        -- Show/hide mode sub-settings
+        local hasBuffMode = (curMode == "AUTOBUFF" or curMode == "BUFF_THEN_CD" or curMode == "REMINDER_BUFF")
+        local isReminder = (curMode == "REMINDER_BUFF")
+        local isCharges = (curMode == "CHARGES")
+        local isBuffAura = (curMode == "BUFF_AURA")
+
+        buffDurLabel:SetShown(hasBuffMode); buffDurEdit:SetShown(hasBuffMode)
+        buffDelayLabel:SetShown(hasBuffMode); buffDelayEdit:SetShown(hasBuffMode)
+        hasteCheck:SetShown(hasBuffMode)
+        reminderTextLabel:SetShown(isReminder); reminderTextEdit:SetShown(isReminder)
+        baAbsentCheck:SetShown(isBuffAura); baDesatCheck:SetShown(isBuffAura); baStacksCheck:SetShown(isBuffAura)
+        chargeMaxLabel:SetShown(isCharges); chargeMaxEdit:SetShown(isCharges)
+        chargeDurLabel:SetShown(isCharges); chargeDurEdit:SetShown(isCharges)
+
+        if hasBuffMode then
+            local dur = s.autoBuffDuration or (isReminder and 3600 or 10)
+            buffDurEdit:SetText(tostring(math.floor(tonumber(dur) * 1000 + 0.5) / 1000))
+            buffDelayEdit:SetText(tostring(math.floor((s.autoBuffDelay or 0) * 1000 + 0.5) / 1000))
+            hasteCheck:SetChecked(s.hasteScaling and true or false)
+        end
+        if isReminder then reminderTextEdit:SetText(s.reminderText or "MISSING!") end
+        if isBuffAura then
+            baAbsentCheck:SetChecked(s.showWhenAbsent and true or false)
+            baDesatCheck:SetChecked(s.desaturateOnAbsent ~= false)
+            baStacksCheck:SetChecked(s.showStacks ~= false)
+        end
+        if isCharges then
+            chargeMaxEdit:SetText(tostring(s.chargeMax or 3))
+            chargeDurEdit:SetText(tostring(s.chargeDuration or 0))
+        end
+
+        -- Rekey
+        local currentID
+        if MSWA_IsItemKey(key) then currentID = MSWA_KeyToItemID(key)
+        elseif MSWA_IsSpellInstanceKey(key) then currentID = MSWA_KeyToSpellID(key)
+        elseif type(key) == "number" then currentID = key end
+        rekeyEdit:SetText(currentID and tostring(currentID) or "")
+        local isDraft = MSWA_IsDraftKey(key)
+        rekeyLabel:SetShown(not isDraft); rekeyEdit:SetShown(not isDraft); rekeyBtn:SetShown(not isDraft)
+
+        -- Anchor
+        local gid2 = MSWA_GetAuraGroup and MSWA_GetAuraGroup(key) or nil
+        local a
+        if gid2 then local g2 = (db.groups or {})[gid2]; a = (g2 and g2.anchorFrame) or ""
+        else a = s.anchorFrame or "" end
+        anchorEdit:SetText(a)
     end
+    return f
 end
 
 -----------------------------------------------------------
--- CreateOptionsFrame  (the big UI builder)
--- This is copied verbatim from the original with only
--- the throttle call-sites changed to MSWA_RequestUpdateSpells
+-- PAGE: Look (Display Type + Visual Options)
 -----------------------------------------------------------
+local function BuildLookPage(host)
+    local f = W.ScrollPage(host)
+    local c = f._content
+    W.Title(c, "Appearance", 12, -10)
+    W.MutedLabel(c, "Display type, icon/bar settings.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+
+    local dtHeader = W.SectionHeader(c, "Display Type", nil, -54)
+    local dtIcon = W.ModeCard(c, "Icon", "Square button", 155, 36)
+    dtIcon:SetPoint("TOPLEFT", dtHeader, "BOTTOMLEFT", 0, -8)
+    local dtBar = W.ModeCard(c, "Bar", "Progress bar", 155, 36)
+    dtBar:SetPoint("LEFT", dtIcon, "RIGHT", 6, 0)
+
+    dtIcon:SetScript("OnMouseDown", function() local s = EnsureSel(); if s then s.displayType = nil end; MSWA_RequestUpdateSpells(); f:Refresh() end)
+    dtBar:SetScript("OnMouseDown", function() local s = EnsureSel(); if s then s.displayType = "BAR" end; MSWA_RequestUpdateSpells(); f:Refresh() end)
+
+    -- Icon settings
+    local iconHeader = W.SectionHeader(c, "Icon Settings", dtIcon, -16)
+
+    local ciLabel = W.Label(c, "Custom Icon ID:", "TOPLEFT", iconHeader, "BOTTOMLEFT", 0, -10)
+    local ciEdit = W.EditBox(c, 70, 22, true)
+    ciEdit:SetPoint("LEFT", ciLabel, "RIGHT", 8, 0)
+    ciEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local s = EnsureSel(); if not s then return end
+        local v = tonumber(self:GetText()); s.customIconID = (v and v > 0) and v or nil
+        MSWA_InvalidateIconCache(); MSWA_RefreshOptionsList()
+    end)
+
+    local cbGray = W.Checkbox(c, "Grayscale on cooldown", nil, function(v) local s = EnsureSel(); if s then s.grayOnCooldown = v or nil end; MSWA_RequestUpdateSpells() end)
+    cbGray:SetPoint("TOPLEFT", ciLabel, "BOTTOMLEFT", 0, -8)
+    local cbGrayZero = W.Checkbox(c, "Show grayed when item count is 0", nil, function(v) local s = EnsureSel(); if s then s.showOnZeroCount = v or nil end; MSWA_RequestUpdateSpells() end)
+    cbGrayZero:SetPoint("TOPLEFT", cbGray, "BOTTOMLEFT", 0, -4)
+    local cbSwipe = W.Checkbox(c, "Swipe darkens on loss", nil, function(v) local s = EnsureSel(); if s then s.swipeDarken = v or nil end; MSWA_RequestUpdateSpells() end)
+    cbSwipe:SetPoint("TOPLEFT", cbGrayZero, "BOTTOMLEFT", 0, -4)
+    local cbDecimal = W.Checkbox(c, "Show decimal (e.g. 3.7 instead of 4)", nil, function(v) local s = EnsureSel(); if s then s.showDecimal = v end; MSWA_InvalidateIconCache(); MSWA_RequestUpdateSpells() end)
+    cbDecimal:SetPoint("TOPLEFT", cbSwipe, "BOTTOMLEFT", 0, -4)
+
+    -- Bar settings
+    local barHeader = W.SectionHeader(c, "Bar Settings", cbDecimal, -16)
+    local barNameLabel = W.Label(c, "Name:", "TOPLEFT", barHeader, "BOTTOMLEFT", 0, -10)
+    local barNameEdit = W.EditBox(c, 180, 22)
+    barNameEdit:SetPoint("LEFT", barNameLabel, "RIGHT", 8, 0)
+    barNameEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local key = GetSelKey(); if not key then return end; local db = MSWA_GetDB()
+        db.customNames = db.customNames or {}; local v = self:GetText()
+        db.customNames[key] = (v ~= "" and v) or nil; MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
+    end)
+
+    local barWLabel = W.Label(c, "Width:", "TOPLEFT", barNameLabel, "BOTTOMLEFT", 0, -8)
+    local barWEdit = W.EditBox(c, 60, 22, true); barWEdit:SetPoint("LEFT", barWLabel, "RIGHT", 8, 0)
+    local barHLabel = W.Label(c, "H:", "LEFT", barWEdit, "RIGHT", 8, 0)
+    local barHEdit = W.EditBox(c, 60, 22, true); barHEdit:SetPoint("LEFT", barHLabel, "RIGHT", 4, 0)
+
+    local function ApplyBarSize()
+        local s = EnsureSel(); if not s then return end
+        local w = tonumber(barWEdit:GetText()); if w and w > 0 then s.barWidth = w end
+        local h = tonumber(barHEdit:GetText()); if h and h > 0 then s.barHeight = h end
+        MSWA_RequestUpdateSpells()
+    end
+    barWEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyBarSize() end)
+    barHEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyBarSize() end)
+
+    local barColor = W.ColorSwatch(c, "Bar Color",
+        function() local s = GetSel(); local bc = s and s.barColor or { r = 0.9, g = 0.7, b = 0 }; return { bc.r, bc.g, bc.b } end,
+        function(v) local s = EnsureSel(); if s then s.barColor = { r = v[1], g = v[2], b = v[3] } end; MSWA_RequestUpdateSpells() end)
+    barColor:SetPoint("TOPLEFT", barWLabel, "BOTTOMLEFT", 0, -8)
+
+    local cbBarName = W.Checkbox(c, "Show name", nil, function(v) local s = EnsureSel(); if s then s.barShowName = v end; MSWA_RequestUpdateSpells() end)
+    cbBarName:SetPoint("TOPLEFT", barColor, "BOTTOMLEFT", 0, -8)
+    local cbBarTimer = W.Checkbox(c, "Show timer", nil, function(v) local s = EnsureSel(); if s then s.barShowTimer = v end; MSWA_RequestUpdateSpells() end)
+    cbBarTimer:SetPoint("TOPLEFT", cbBarName, "BOTTOMLEFT", 0, -4)
+    local cbBarSpark = W.Checkbox(c, "Show spark", nil, function(v) local s = EnsureSel(); if s then s.barShowSpark = v end; MSWA_RequestUpdateSpells() end)
+    cbBarSpark:SetPoint("TOPLEFT", cbBarTimer, "BOTTOMLEFT", 0, -4)
+    local cbBarIcon = W.Checkbox(c, "Show icon", nil, function(v) local s = EnsureSel(); if s then s.barShowIcon = v end; MSWA_RequestUpdateSpells() end)
+    cbBarIcon:SetPoint("TOPLEFT", cbBarSpark, "BOTTOMLEFT", 0, -4)
+
+    c:SetHeight(800)
+
+    function f:Refresh()
+        local s = GetSel() or {}
+        local isBar = (s.displayType == "BAR")
+        dtIcon:SetSelected(not isBar); dtBar:SetSelected(isBar)
+
+        -- Show/hide bar vs icon settings
+        barHeader:SetShown(isBar); barNameLabel:SetShown(isBar); barNameEdit:SetShown(isBar)
+        barWLabel:SetShown(isBar); barWEdit:SetShown(isBar); barHLabel:SetShown(isBar); barHEdit:SetShown(isBar)
+        barColor:SetShown(isBar); cbBarName:SetShown(isBar); cbBarTimer:SetShown(isBar); cbBarSpark:SetShown(isBar); cbBarIcon:SetShown(isBar)
+
+        -- Icon settings
+        ciEdit:SetText(tostring((s.customIconID and s.customIconID > 0) and s.customIconID or ""))
+        cbGray:SetChecked(s.grayOnCooldown and true or false)
+        cbGrayZero:SetChecked(s.showOnZeroCount and true or false)
+        cbSwipe:SetChecked(s.swipeDarken and true or false)
+        cbDecimal:SetChecked(s.showDecimal and true or false)
+
+        -- Bar settings
+        if isBar then
+            local key = GetSelKey()
+            local db = MSWA_GetDB(); local cn = (db.customNames and db.customNames[key]) or ""
+            barNameEdit:SetText(cn ~= "" and cn or (MSWA_GetDisplayNameForKey(key) or ""))
+            barWEdit:SetText(tostring(s.barWidth or 200))
+            barHEdit:SetText(tostring(s.barHeight or 22))
+            barColor:Refresh()
+            cbBarName:SetChecked(s.barShowName ~= false)
+            cbBarTimer:SetChecked(s.barShowTimer ~= false)
+            cbBarSpark:SetChecked(s.barShowSpark ~= false)
+            cbBarIcon:SetChecked(s.barShowIcon ~= false)
+        end
+    end
+    return f
+end
+
+-----------------------------------------------------------
+-- PAGE: Text (Timer Font + Stack Counter)
+-----------------------------------------------------------
+local function BuildTextPage(host)
+    local f = W.ScrollPage(host)
+    local c = f._content
+    W.Title(c, "Text & Stacks", 12, -10)
+    W.MutedLabel(c, "Timer text formatting and stack counter settings.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+
+    local h1 = W.SectionHeader(c, "Timer Text", nil, -54)
+
+    local fontChoices = function()
+        if not MSWA.fontChoices then MSWA_RebuildFontChoices() end
+        local out = {}
+        for _, d in ipairs(MSWA.fontChoices or {}) do tinsert(out, { text = d.label, value = d.key }) end
+        return out
+    end
+
+    local ddFont = W.Dropdown(c, "Font", 200, fontChoices,
+        function() local s = GetSel(); local db = MSWA_GetDB(); return (s and s.textFontKey) or (db and db.fontKey) or "DEFAULT" end,
+        function(v) local key = GetSelKey(); if key then local s = EnsureSel(); if s then s.textFontKey = (v ~= "DEFAULT") and v or nil end
+        else MSWA_GetDB().fontKey = (v ~= "DEFAULT") and v or "DEFAULT" end; MSWA_InvalidateIconCache() end)
+    ddFont:SetPoint("TOPLEFT", h1, "BOTTOMLEFT", 0, -10)
+
+    local sizeLabel = W.Label(c, "Size:", "TOPLEFT", ddFont, "BOTTOMLEFT", 0, -8)
+    local sizeEdit = W.EditBox(c, 50, 22, true); sizeEdit:SetPoint("LEFT", sizeLabel, "RIGHT", 8, 0)
+    local sizeMinus = W.Button(c, "-", 24, 22, function()
+        local s = EnsureSel() or MSWA_GetDB(); local cur = tonumber(s.textFontSize or MSWA_GetDB().textFontSize or 12)
+        cur = math.max(6, cur - 1); s.textFontSize = cur; sizeEdit:SetText(tostring(cur)); MSWA_InvalidateIconCache()
+    end); sizeMinus:SetPoint("LEFT", sizeEdit, "RIGHT", 4, 0)
+    local sizePlus = W.Button(c, "+", 24, 22, function()
+        local s = EnsureSel() or MSWA_GetDB(); local cur = tonumber(s.textFontSize or MSWA_GetDB().textFontSize or 12)
+        cur = math.min(48, cur + 1); s.textFontSize = cur; sizeEdit:SetText(tostring(cur)); MSWA_InvalidateIconCache()
+    end); sizePlus:SetPoint("LEFT", sizeMinus, "RIGHT", 2, 0)
+
+    local ddPos = W.Dropdown(c, "Position", 140,
+        function() local out = {}; for _, p in ipairs({"BOTTOMRIGHT","BOTTOMLEFT","TOPRIGHT","TOPLEFT","CENTER"}) do tinsert(out, {text=GetTextPosLabel(p), value=p}) end; return out end,
+        function() local s = GetSel(); return (s and s.textPoint) or MSWA_GetDB().textPoint or "BOTTOMRIGHT" end,
+        function(v) local key = GetSelKey(); if key then local s = EnsureSel(); s.textPoint = v else MSWA_GetDB().textPoint = v end; MSWA_InvalidateIconCache() end)
+    ddPos:SetPoint("TOPLEFT", sizeLabel, "BOTTOMLEFT", 0, -8)
+
+    local textColor = W.ColorSwatch(c, "Text Color",
+        function() local s = GetSel(); local tc = (s and s.textColor) or MSWA_GetDB().textColor or {r=1,g=1,b=1}; return {tc.r, tc.g, tc.b} end,
+        function(v) local key = GetSelKey(); if key then local s = EnsureSel(); s.textColor = {r=v[1],g=v[2],b=v[3]} else local db = MSWA_GetDB(); db.textColor = {r=v[1],g=v[2],b=v[3]} end; MSWA_InvalidateIconCache() end)
+    textColor:SetPoint("TOPLEFT", ddPos, "BOTTOMLEFT", 0, -8)
+
+    -- Stacks section
+    local h2 = W.SectionHeader(c, "Stack Counter", textColor, -16)
+
+    local ddStackFont = W.Dropdown(c, "Font", 200, fontChoices,
+        function() local s = GetSel(); local db = MSWA_GetDB(); return (s and s.stackFontKey) or (db and db.stackFontKey) or (db and db.fontKey) or "DEFAULT" end,
+        function(v) local key = GetSelKey(); if key then local s = EnsureSel(); s.stackFontKey = (v ~= "DEFAULT") and v or nil end; MSWA_InvalidateIconCache() end)
+    ddStackFont:SetPoint("TOPLEFT", h2, "BOTTOMLEFT", 0, -10)
+
+    local stackSizeLabel = W.Label(c, "Size:", "TOPLEFT", ddStackFont, "BOTTOMLEFT", 0, -8)
+    local stackSizeEdit = W.EditBox(c, 50, 22, true); stackSizeEdit:SetPoint("LEFT", stackSizeLabel, "RIGHT", 8, 0)
+    stackSizeEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local s = EnsureSel(); if s then local v = tonumber(self:GetText()); if v and v >= 6 and v <= 48 then s.stackFontSize = v end end; MSWA_InvalidateIconCache()
+    end)
+
+    local stackColor = W.ColorSwatch(c, "Color",
+        function() local s = GetSel(); local sc = (s and s.stackColor) or {r=1,g=1,b=1}; return {sc.r, sc.g, sc.b} end,
+        function(v) local s = EnsureSel(); if s then s.stackColor = {r=v[1],g=v[2],b=v[3]} end; MSWA_InvalidateIconCache() end)
+    stackColor:SetPoint("TOPLEFT", stackSizeLabel, "BOTTOMLEFT", 0, -8)
+
+    local cbHideStacksCD = W.Checkbox(c, "Hide stacks while on cooldown", nil, function(v) local s = EnsureSel(); if s then s.hideStacksOnCooldown = v end; MSWA_RequestUpdateSpells() end)
+    cbHideStacksCD:SetPoint("TOPLEFT", stackColor, "BOTTOMLEFT", 0, -8)
+
+    c:SetHeight(600)
+
+    function f:Refresh()
+        local s = GetSel() or {}; local db = MSWA_GetDB()
+        ddFont:Refresh()
+        local sz = tonumber(s.textFontSize or db.textFontSize or 12); sizeEdit:SetText(tostring(math.max(6, math.min(48, sz))))
+        ddPos:Refresh(); textColor:Refresh()
+        ddStackFont:Refresh()
+        stackSizeEdit:SetText(tostring(tonumber(s.stackFontSize or db.stackFontSize or 12)))
+        stackColor:Refresh()
+        cbHideStacksCD:SetChecked(s.hideStacksOnCooldown and true or false)
+    end
+    return f
+end
+
+-----------------------------------------------------------
+-- PAGE: Glow
+-----------------------------------------------------------
+local function BuildGlowPage(host)
+    local f = W.ScrollPage(host)
+    local c = f._content
+    local avail = MSWA_IsGlowAvailable and MSWA_IsGlowAvailable() or false
+    W.Title(c, avail and "Glow Settings" or "Glow (LibCustomGlow not found)", 12, -10)
+
+    local cbEnable = W.Checkbox(c, "Enable Glow", nil, function(v)
+        local s = EnsureSel(); if not s then return end
+        s.glow = s.glow or {}; s.glow.enabled = v
+        if not v and MSWA_StopAllGlows then MSWA_StopAllGlows() end; MSWA_RequestUpdateSpells()
+    end)
+    cbEnable:SetPoint("TOPLEFT", c, "TOPLEFT", 12, -40)
+
+    local GLOW_TYPES = { PIXEL = "Pixel Glow", AUTOCAST = "AutoCast Glow", BUTTON = "Action Button Glow", PROC = "Proc Glow" }
+    local ddType = W.Dropdown(c, "Type", 180,
+        function() return {{ text="Pixel Glow", value="PIXEL" },{ text="AutoCast Glow", value="AUTOCAST" },{ text="Action Button Glow", value="BUTTON" },{ text="Proc Glow", value="PROC" }} end,
+        function() local s = GetSel(); return s and s.glow and s.glow.glowType or "PIXEL" end,
+        function(v) local s = EnsureSel(); if s then s.glow = s.glow or {}; s.glow.glowType = v end; if MSWA_StopAllGlows then MSWA_StopAllGlows() end; MSWA_RequestUpdateSpells(); f:Refresh() end)
+    ddType:SetPoint("TOPLEFT", cbEnable, "BOTTOMLEFT", 0, -8)
+
+    local glowColor = W.ColorSwatch(c, "Color",
+        function() local s = GetSel(); local gc = s and s.glow and s.glow.color or {r=0.95,g=0.95,b=0.32}; return {gc.r, gc.g, gc.b} end,
+        function(v) local s = EnsureSel(); if s then s.glow = s.glow or {}; s.glow.color = s.glow.color or {}; s.glow.color.r=v[1]; s.glow.color.g=v[2]; s.glow.color.b=v[3] end; MSWA_RequestUpdateSpells() end)
+    glowColor:SetPoint("TOPLEFT", ddType, "BOTTOMLEFT", 0, -8)
+
+    local ddCond = W.Dropdown(c, "Condition", 180,
+        function() return {{ text="Always", value="ALWAYS" },{ text="On Ready", value="READY" },{ text="On Cooldown", value="ON_CD" },{ text="Timer below X", value="TIMER_BELOW" },{ text="Timer above X", value="TIMER_ABOVE" }} end,
+        function() local s = GetSel(); return s and s.glow and s.glow.condition or "ALWAYS" end,
+        function(v) local s = EnsureSel(); if s then s.glow = s.glow or {}; s.glow.condition = v end; MSWA_RequestUpdateSpells(); f:Refresh() end)
+    ddCond:SetPoint("TOPLEFT", glowColor, "BOTTOMLEFT", 0, -8)
+
+    local condValLabel = W.Label(c, "Seconds:", "TOPLEFT", ddCond, "BOTTOMLEFT", 0, -8)
+    local condValEdit = W.EditBox(c, 50, 22)
+    condValEdit:SetPoint("LEFT", condValLabel, "RIGHT", 8, 0)
+    condValEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local s = EnsureSel(); if s then s.glow = s.glow or {}; local v = tonumber(self:GetText()); if v and v >= 0 then s.glow.conditionValue = v end end; MSWA_RequestUpdateSpells()
+    end)
+
+    local h2 = W.SectionHeader(c, "Fine-Tuning", condValLabel, -14)
+    local linesLabel = W.Label(c, "Lines:", "TOPLEFT", h2, "BOTTOMLEFT", 0, -10)
+    local linesEdit = W.EditBox(c, 40, 22, true); linesEdit:SetPoint("LEFT", linesLabel, "RIGHT", 8, 0)
+    local freqLabel = W.Label(c, "Speed:", "LEFT", linesEdit, "RIGHT", 12, 0)
+    local freqEdit = W.EditBox(c, 50, 22); freqEdit:SetPoint("LEFT", freqLabel, "RIGHT", 8, 0)
+    local thickLabel = W.Label(c, "Thickness:", "TOPLEFT", linesLabel, "BOTTOMLEFT", 0, -8)
+    local thickEdit = W.EditBox(c, 50, 22); thickEdit:SetPoint("LEFT", thickLabel, "RIGHT", 8, 0)
+
+    local function ApplyGlowDetails()
+        local s = EnsureSel(); if not s then return end; s.glow = s.glow or {}
+        local l = tonumber(linesEdit:GetText()); if l and l >= 1 and l <= 32 then s.glow.lines = l end
+        local fr = tonumber(freqEdit:GetText()); if fr then s.glow.frequency = fr end
+        local th = tonumber(thickEdit:GetText()); if th and th > 0 then s.glow.thickness = th; s.glow.scale = th end
+        if MSWA_StopAllGlows then MSWA_StopAllGlows() end; MSWA_RequestUpdateSpells()
+    end
+    linesEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyGlowDetails() end)
+    freqEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyGlowDetails() end)
+    thickEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyGlowDetails() end)
+
+    c:SetHeight(500)
+
+    function f:Refresh()
+        local s = GetSel() or {}; local gs = s.glow or {}
+        cbEnable:SetChecked(gs.enabled and true or false)
+        ddType:Refresh(); glowColor:Refresh(); ddCond:Refresh()
+        local cond = gs.condition or "ALWAYS"
+        local showVal = (cond == "TIMER_BELOW" or cond == "TIMER_ABOVE")
+        condValLabel:SetShown(showVal); condValEdit:SetShown(showVal)
+        if showVal then condValEdit:SetText(tostring(gs.conditionValue or 5)) end
+        linesEdit:SetText(tostring(gs.lines or 8))
+        freqEdit:SetText(tostring(gs.frequency or 0.25))
+        thickEdit:SetText(tostring(gs.thickness or gs.scale or 2))
+    end
+    return f
+end
+
+-----------------------------------------------------------
+-- PAGE: Sound
+-----------------------------------------------------------
+local function BuildSoundPage(host)
+    local f = W.ScrollPage(host)
+    local c = f._content
+    W.Title(c, "Sound Effects", 12, -10)
+    W.MutedLabel(c, "Play sounds when cooldowns start or become ready.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+
+    local function SoundOpts()
+        local out = {{ text = "-- None --", value = "NONE" }}
+        if MSWA_GetSoundChoices then for _, e in ipairs(MSWA_GetSoundChoices()) do tinsert(out, { text = e.label, value = e.key }) end end
+        return out
+    end
+
+    local ddStart = W.Dropdown(c, "On Cooldown Start", 240, SoundOpts,
+        function() local s = GetSel(); return s and s.soundOnStart or "NONE" end,
+        function(v) local s = EnsureSel(); if s then s.soundOnStart = v end end)
+    ddStart:SetPoint("TOPLEFT", c, "TOPLEFT", 12, -58)
+
+    local prevStart = W.Button(c, ">", 28, 22, function()
+        local s = GetSel(); if s and s.soundOnStart and s.soundOnStart ~= "NONE" and MSWA_PlaySoundByKey then MSWA_PlaySoundByKey(s.soundOnStart, s.soundChannel or "Master") end
+    end); prevStart:SetPoint("LEFT", ddStart._btn, "RIGHT", 6, 0)
+
+    local ddReady = W.Dropdown(c, "On Ready", 240, SoundOpts,
+        function() local s = GetSel(); return s and s.soundOnReady or "NONE" end,
+        function(v) local s = EnsureSel(); if s then s.soundOnReady = v end end)
+    ddReady:SetPoint("TOPLEFT", ddStart, "BOTTOMLEFT", 0, -8)
+
+    local prevReady = W.Button(c, ">", 28, 22, function()
+        local s = GetSel(); if s and s.soundOnReady and s.soundOnReady ~= "NONE" and MSWA_PlaySoundByKey then MSWA_PlaySoundByKey(s.soundOnReady, s.soundChannel or "Master") end
+    end); prevReady:SetPoint("LEFT", ddReady._btn, "RIGHT", 6, 0)
+
+    local ddCh = W.Dropdown(c, "Audio Channel", 160,
+        function() return {{ text="Master",value="Master" },{ text="SFX",value="SFX" },{ text="Music",value="Music" },{ text="Ambience",value="Ambience" },{ text="Dialog",value="Dialog" }} end,
+        function() local s = GetSel(); return s and s.soundChannel or "Master" end,
+        function(v) local s = EnsureSel(); if s then s.soundChannel = v end end)
+    ddCh:SetPoint("TOPLEFT", ddReady, "BOTTOMLEFT", 0, -8)
+
+    c:SetHeight(280)
+    function f:Refresh() ddStart:Refresh(); ddReady:Refresh(); ddCh:Refresh() end
+    return f
+end
+
+-----------------------------------------------------------
+-- PAGE: Alpha (4 sliders)
+-----------------------------------------------------------
+local function BuildAlphaPage(host)
+    local f = W.ScrollPage(host)
+    local c = f._content
+    W.Title(c, "Alpha / Visibility", 12, -10)
+    W.MutedLabel(c, "Control icon opacity per state.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+
+    local function MakeAlphaSlider(label, field, anchor, yOff)
+        local sl = W.Slider(c, label, 0, 100, 1,
+            function() local s = GetSel(); return math.floor(((s and tonumber(s[field])) or 1.0) * 100 + 0.5) end,
+            function(v) local s = EnsureSel(); if s then s[field] = v / 100; MSWA_RequestUpdateSpells() end end)
+        sl:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, yOff or -8)
+        return sl
+    end
+
+    local h1 = W.SectionHeader(c, "State Alpha", nil, -54)
+    local slCD = MakeAlphaSlider("On Cooldown", "cdAlpha", h1, -12)
+    local slOOC = MakeAlphaSlider("Out of Combat", "oocAlpha", slCD)
+    local slCombat = MakeAlphaSlider("In Combat", "combatAlpha", slOOC)
+    local slReady = MakeAlphaSlider("Ready", "readyAlpha", slCombat)
+
+    c:SetHeight(340)
+    function f:Refresh() slCD:Refresh(); slOOC:Refresh(); slCombat:Refresh(); slReady:Refresh() end
+    return f
+end
+
+-----------------------------------------------------------
+-- PAGE: Load (Load Conditions)
+-----------------------------------------------------------
+local function BuildLoadPage(host)
+    local f = W.ScrollPage(host)
+    local c = f._content
+    W.Title(c, "Load Conditions", 12, -10)
+    W.MutedLabel(c, "Control when this aura is active.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+
+    local cbNever = W.Checkbox(c, "Never (disable)", nil, function(v)
+        local s = EnsureSel(); if s then s.loadNever = v or nil end; MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
+    end)
+    cbNever:SetPoint("TOPLEFT", c, "TOPLEFT", 12, -58)
+
+    local combatLabel = W.Label(c, "Combat:", "TOPLEFT", cbNever, "BOTTOMLEFT", 0, -10)
+    local combatBtn = W.Button(c, "Always", 100, 22, function()
+        local s = EnsureSel(); if not s or s.loadNever then return end
+        local cur = s.loadCombatMode
+        local next = cur == nil and "IN" or (cur == "IN" and "OUT" or nil)
+        s.loadCombatMode = next; MSWA_RequestUpdateSpells(); f:Refresh()
+    end)
+    combatBtn:SetPoint("LEFT", combatLabel, "RIGHT", 8, 0)
+
+    local encLabel = W.Label(c, "Encounter:", "TOPLEFT", combatLabel, "BOTTOMLEFT", 0, -8)
+    local encBtn = W.Button(c, "Always", 100, 22, function()
+        local s = EnsureSel(); if not s or s.loadNever then return end
+        local cur = s.loadEncounterMode
+        local next = cur == nil and "IN" or (cur == "IN" and "OUT" or nil)
+        s.loadEncounterMode = next; MSWA_RequestUpdateSpells(); f:Refresh()
+    end)
+    encBtn:SetPoint("LEFT", encLabel, "RIGHT", 8, 0)
+
+    local charLabel = W.Label(c, "Character:", "TOPLEFT", encLabel, "BOTTOMLEFT", 0, -8)
+    local charEdit = W.EditBox(c, 160, 22)
+    charEdit:SetPoint("LEFT", charLabel, "RIGHT", 8, 0)
+    charEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local s = EnsureSel(); if not s or s.loadNever then return end
+        local v = self:GetText():gsub("^%s+",""):gsub("%s+$","")
+        if v == "" then s.loadCharName = nil
+        else if not v:find("%-") then local realm = MSWA_GetPlayerRealm and MSWA_GetPlayerRealm() or ""; if realm ~= "" then v = v .. "-" .. realm end end
+            s.loadCharName = v end
+        MSWA_RequestUpdateSpells()
+    end)
+
+    local meBtn = W.Button(c, "Me", 40, 22, function()
+        local s = EnsureSel(); if not s or s.loadNever then return end
+        local name = MSWA_GetPlayerName and MSWA_GetPlayerName() or ""
+        local realm = MSWA_GetPlayerRealm and MSWA_GetPlayerRealm() or ""
+        local full = realm ~= "" and (name .. "-" .. realm) or name
+        s.loadCharName = full; MSWA_RequestUpdateSpells(); f:Refresh()
+    end)
+    meBtn:SetPoint("LEFT", charEdit, "RIGHT", 6, 0)
+
+    c:SetHeight(320)
+
+    function f:Refresh()
+        local s = GetSel() or {}
+        cbNever:SetChecked(s.loadNever and true or false)
+        local cm = s.loadCombatMode
+        local cmText = cm == "IN" and "In Combat" or (cm == "OUT" and "Out of Combat" or "Always")
+        combatBtn:SetText(cmText)
+        local em = s.loadEncounterMode
+        local emText = em == "IN" and "In Encounter" or (em == "OUT" and "No Encounter" or "Always")
+        encBtn:SetText(emText)
+        charEdit:SetText(s.loadCharName or "")
+    end
+    return f
+end
+
+-----------------------------------------------------------
+-- PAGE: Position (X/Y/W/H)
+-----------------------------------------------------------
+local function BuildPositionPage(host)
+    local f = W.ScrollPage(host)
+    local c = f._content
+    W.Title(c, "Position & Size", 12, -10)
+    W.MutedLabel(c, "Fine-tune aura placement and dimensions.", "TOPLEFT", c, "TOPLEFT", 12, -34)
+
+    local h1 = W.SectionHeader(c, "Coordinates", nil, -54)
+
+    local function MakePosRow(lbl, anchor, yOff, field, default)
+        local l = W.Label(c, lbl, "TOPLEFT", anchor, "BOTTOMLEFT", 0, yOff or -8)
+        local eb = W.EditBox(c, 70, 22); eb:SetPoint("LEFT", l, "RIGHT", 8, 0)
+        local minus = W.Button(c, "-", 24, 22, function()
+            local s = EnsureSel(); if s then s[field] = (s[field] or default or 0) - 1 end
+            MSWA_RequestUpdateSpells(); f:Refresh()
+        end); minus:SetPoint("LEFT", eb, "RIGHT", 4, 0)
+        local plus = W.Button(c, "+", 24, 22, function()
+            local s = EnsureSel(); if s then s[field] = (s[field] or default or 0) + 1 end
+            MSWA_RequestUpdateSpells(); f:Refresh()
+        end); plus:SetPoint("LEFT", minus, "RIGHT", 2, 0)
+        eb:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+            local s = EnsureSel(); if s then local v = tonumber(self:GetText()); if v then s[field] = v end end; MSWA_RequestUpdateSpells()
+        end)
+        return l, eb
+    end
+
+    local lX, ebX = MakePosRow("X:", h1, -10, "x", 0)
+    local lY, ebY = MakePosRow("Y:", lX, -8, "y", 0)
+    local lW, ebW = MakePosRow("Width:", lY, -8, "width", MSWA.ICON_SIZE)
+    local lH, ebH = MakePosRow("Height:", lW, -8, "height", MSWA.ICON_SIZE)
+
+    local btnReset = W.Button(c, "Reset Position", 120, 24, function()
+        local s = EnsureSel(); if s then s.x = 0; s.y = 0 end; MSWA_RequestUpdateSpells(); f:Refresh()
+    end); btnReset:SetPoint("TOPLEFT", lH, "BOTTOMLEFT", 0, -14)
+
+    local btnDefault = W.Button(c, "Default Size", 120, 24, function()
+        local s = EnsureSel(); if s then s.width = nil; s.height = nil end; MSWA_RequestUpdateSpells(); f:Refresh()
+    end); btnDefault:SetPoint("LEFT", btnReset, "RIGHT", 8, 0)
+
+    c:SetHeight(320)
+
+    function f:Refresh()
+        local s = GetSel() or {}
+        ebX:SetText(("%d"):format(s.x or 0)); ebY:SetText(("%d"):format(s.y or 0))
+        ebW:SetText(("%d"):format(s.width or MSWA.ICON_SIZE)); ebH:SetText(("%d"):format(s.height or MSWA.ICON_SIZE))
+    end
+    return f
+end
+
+-- Register all pages
+_pages = {
+    trigger = { build = BuildTriggerPage, frame = nil },
+    look    = { build = BuildLookPage,    frame = nil },
+    text    = { build = BuildTextPage,    frame = nil },
+    glow    = { build = BuildGlowPage,    frame = nil },
+    sound   = { build = BuildSoundPage,   frame = nil },
+    alpha   = { build = BuildAlphaPage,   frame = nil },
+    load    = { build = BuildLoadPage,    frame = nil },
+    pos     = { build = BuildPositionPage,frame = nil },
+}
+
+-- ═══════════════════════════════════════════════════════
+-- CreateOptionsFrame (v2 — MSUF/PeelDamage Midnight)
+-- ═══════════════════════════════════════════════════════
+
+local NAV_WIDTH = 100
+local NAV_BTN_H = 24
+local NAV_BTN_GAP = 3
 
 local function MSWA_CreateOptionsFrame()
     if MSWA.optionsFrame then return MSWA.optionsFrame end
 
-    local f = CreateFrame("Frame", "MidnightSimpleAurasOptions", UIParent, "BasicFrameTemplateWithInset")
-    f:SetSize(860, 520); f:SetPoint("CENTER"); f:SetMovable(true); f:EnableMouse(true)
+    local f = CreateFrame("Frame", "MidnightSimpleAurasOptions", UIParent, "BackdropTemplate")
+    f:SetSize(940, 560); f:SetPoint("CENTER")
+    f:SetFrameStrata("DIALOG"); f:SetClampedToScreen(true)
+    f:SetMovable(true); f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving); f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    W.ApplyBackdrop(f, 0.97)
 
-    -- Resizable
-    if f.SetResizable then f:SetResizable(true) end
-    if f.SetResizeBounds then
-        f:SetResizeBounds(700, 400, 1200, 800)
-    elseif f.SetMinResize then
-        f:SetMinResize(700, 400); f:SetMaxResize(1200, 800)
-    end
+    f:SetResizable(true)
+    if f.SetResizeBounds then f:SetResizeBounds(760, 440, 1200, 800)
+    elseif f.SetMinResize then f:SetMinResize(760, 440); f:SetMaxResize(1200, 800) end
 
-    -- Resize grip (bottom-right corner)
-    local grip = CreateFrame("Button", nil, f)
-    grip:SetSize(16, 16)
-    grip:SetPoint("BOTTOMRIGHT", -4, 4)
-    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
-    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
-    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
-    grip:SetScript("OnMouseDown", function(self) f:StartSizing("BOTTOMRIGHT") end)
-    grip:SetScript("OnMouseUp", function(self) f:StopMovingOrSizing() end)
-    f.resizeGrip = grip
+    -- Resize grip
+    local grip = CreateFrame("Frame", nil, f)
+    grip:SetSize(16, 16); grip:SetPoint("BOTTOMRIGHT", -4, 4); grip:EnableMouse(true)
+    grip:SetFrameLevel(f:GetFrameLevel() + 10)
+    local gt = grip:CreateTexture(nil, "OVERLAY"); gt:SetAllPoints()
+    gt:SetTexture("Interface/ChatFrame/UI-ChatIM-SizeGrabber-Up")
+    grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT"); gt:SetTexture("Interface/ChatFrame/UI-ChatIM-SizeGrabber-Down") end)
+    grip:SetScript("OnMouseUp", function() f:StopMovingOrSizing(); gt:SetTexture("Interface/ChatFrame/UI-ChatIM-SizeGrabber-Up") end)
+    grip:SetScript("OnEnter", function() gt:SetTexture("Interface/ChatFrame/UI-ChatIM-SizeGrabber-Highlight") end)
+    grip:SetScript("OnLeave", function() gt:SetTexture("Interface/ChatFrame/UI-ChatIM-SizeGrabber-Up") end)
 
-    -- Title (left) + Version (right)
-    -- NOTE: Never use space-padding to "push" version text; it breaks under scaling and different fonts.
-    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    f.title:SetPoint("LEFT", f.TitleBg, "LEFT", 10, 0)
-    f.title:SetText("Midnight Simple Auras")
+    -- ESC close
+    if type(UISpecialFrames) == "table" then tinsert(UISpecialFrames, "MidnightSimpleAurasOptions") end
 
-    f.versionText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    -- Title + Version
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    f.title:SetPoint("TOPLEFT", 12, -10); f.title:SetText("Midnight Simple Auras"); W.SkinTitle(f.title)
     local tocVer = C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata("MidnightSimpleAuras", "Version") or "?"
-    f.versionText:SetText("v" .. tocVer)
-    -- Anchor against the close button when available so it always stays top-right.
-    local closeBtn = f.CloseButton or _G[f:GetName() .. "CloseButton"]
-    if closeBtn then
-        f.versionText:SetPoint("RIGHT", closeBtn, "LEFT", -8, 0)
-        f.versionText:SetPoint("TOP", f.TitleBg, "TOP", 0, -1)
-    else
-        -- Fallback: hard top-right with safe padding.
-        f.versionText:SetPoint("TOPRIGHT", f.TitleBg, "TOPRIGHT", -8, -1)
-    end
+    f.versionText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.versionText:SetPoint("LEFT", f.title, "RIGHT", 8, -1); f.versionText:SetText("v" .. tocVer); W.SkinMuted(f.versionText)
 
-    -- Left: Aura list
-    local listPanel = CreateFrame("Frame", nil, f, "InsetFrameTemplate3")
-    listPanel:SetPoint("TOPLEFT", 12, -58); listPanel:SetPoint("BOTTOMLEFT", 12, 110); listPanel:SetWidth(310)
+    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", -2, -2); closeBtn:SetScript("OnClick", function() f:Hide() end)
+
+    -- ── Content area ──
+    local content = CreateFrame("Frame", nil, f)
+    content:SetPoint("TOPLEFT", 8, -34); content:SetPoint("BOTTOMRIGHT", -8, 40)
+
+    -- ════════════════════════════════════════════════════
+    -- LEFT SIDEBAR: Aura list
+    -- ════════════════════════════════════════════════════
+    local listPanel = CreateFrame("Frame", nil, content, "BackdropTemplate")
+    listPanel:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
+    listPanel:SetPoint("BOTTOMLEFT", content, "BOTTOMLEFT", 0, 0)
+    listPanel:SetWidth(280)
+    W.ApplyBackdrop(listPanel, 0.22)
     f.listPanel = listPanel
 
-    f.listTitle = listPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.listTitle:SetPoint("TOPLEFT", 10, -8); f.listTitle:SetText("Auras")
+    -- Top buttons
+    f.btnNew = W.Button(listPanel, "New", 60, 22); f.btnNew:SetPoint("TOPLEFT", 6, -6)
+    f.btnImport = W.Button(listPanel, "Import", 60, 22); f.btnImport:SetPoint("LEFT", f.btnNew, "RIGHT", 4, 0)
+    f.btnExport = W.Button(listPanel, "Export", 60, 22); f.btnExport:SetPoint("LEFT", f.btnImport, "RIGHT", 4, 0)
+    f.btnGroup = W.Button(listPanel, "Group", 60, 22); f.btnGroup:SetPoint("LEFT", f.btnExport, "RIGHT", 4, 0)
 
-    f.btnNew = CreateFrame("Button", nil, f, "UIPanelButtonTemplate"); f.btnNew:SetSize(60, 22)
-    f.btnNew:SetPoint("TOPLEFT", 18, -32); f.btnNew:SetText("New")
-
-    f.btnImport = CreateFrame("Button", nil, f, "UIPanelButtonTemplate"); f.btnImport:SetSize(60, 22)
-    f.btnImport:SetPoint("LEFT", f.btnNew, "RIGHT", 6, 0); f.btnImport:SetText("Import")
-
-    f.btnExport = CreateFrame("Button", nil, f, "UIPanelButtonTemplate"); f.btnExport:SetSize(60, 22)
-    f.btnExport:SetPoint("LEFT", f.btnImport, "RIGHT", 6, 0); f.btnExport:SetText("Export")
-
-    f.btnGroup = CreateFrame("Button", nil, f, "UIPanelButtonTemplate"); f.btnGroup:SetSize(60, 22)
-    f.btnGroup:SetPoint("LEFT", f.btnExport, "RIGHT", 6, 0); f.btnGroup:SetText("Group")
-
-    f.btnPreview = CreateFrame("Button", nil, f, "UIPanelButtonTemplate"); f.btnPreview:SetSize(70, 22)
-    f.btnPreview:SetPoint("LEFT", f.btnGroup, "RIGHT", 6, 0); f.btnPreview:SetText("Preview")
-
-    f.btnIDInfo = CreateFrame("Button", nil, f, "UIPanelButtonTemplate"); f.btnIDInfo:SetSize(60, 22)
-    f.btnIDInfo:SetPoint("LEFT", f.btnPreview, "RIGHT", 6, 0); f.btnIDInfo:SetText("ID Info")
-
-    -- Scroll frame + rows
+    -- Aura list scroll
     local rowHeight = 24
-    local MAX_VISIBLE_ROWS = 28  -- pre-create enough for largest window
+    local MAX_VISIBLE_ROWS = 28
     f.rowHeight = rowHeight
 
     function f:GetVisibleRows()
-        local h = self.listPanel and self.listPanel:GetHeight() or 336
-        return math.max(4, math.floor((h - 30) / rowHeight))
+        local h = self.listPanel and self.listPanel:GetHeight() or 400
+        return math.max(4, math.floor((h - 56) / rowHeight))
     end
 
     local scrollFrame = CreateFrame("ScrollFrame", "MSWA_AuraListScrollFrame", listPanel, "FauxScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 0, -24)
+    scrollFrame:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 0, -36)
     scrollFrame:SetPoint("BOTTOMRIGHT", listPanel, "BOTTOMRIGHT", -2, 6)
     scrollFrame:EnableMouseWheel(true)
     f.scrollFrame = scrollFrame
 
-    -----------------------------------------------------------
-    -- Inline rename EditBox (shared across all rows)
-    -----------------------------------------------------------
+    -- Inline rename EditBox
     local inlineEdit = CreateFrame("EditBox", "MSWA_InlineRenameEdit", listPanel, "InputBoxTemplate")
-    inlineEdit:SetSize(200, 20)
-    inlineEdit:SetAutoFocus(false)
-    inlineEdit:SetMaxLetters(64)
-    inlineEdit:SetFrameStrata("DIALOG")
-    inlineEdit:Hide()
-    inlineEdit._renameKey = nil      -- aura key being renamed
-    inlineEdit._renameGroupID = nil  -- group ID being renamed
+    inlineEdit:SetSize(200, 20); inlineEdit:SetAutoFocus(false); inlineEdit:SetMaxLetters(64)
+    inlineEdit:SetFrameStrata("DIALOG"); inlineEdit:Hide()
+    inlineEdit._renameKey = nil; inlineEdit._renameGroupID = nil
     f.inlineEdit = inlineEdit
 
     local function InlineRename_Commit(self)
         local txt = (self:GetText() or ""):gsub("^%s+", ""):gsub("%s+$", "")
         local db = MSWA_GetDB()
         if self._renameGroupID then
-            -- Group rename
             local g = db.groups and db.groups[self._renameGroupID]
-            if g then
-                if txt ~= "" then g.name = txt end
-            end
+            if g and txt ~= "" then g.name = txt end
         elseif self._renameKey ~= nil then
-            -- Aura rename
             db.customNames = db.customNames or {}
-            if txt == "" then
-                db.customNames[self._renameKey] = nil
-            else
-                db.customNames[self._renameKey] = txt
-            end
+            db.customNames[self._renameKey] = (txt ~= "" and txt) or nil
         end
-        self._renameKey = nil
-        self._renameGroupID = nil
-        self:Hide()
-        self:ClearFocus()
-        MSWA_RefreshOptionsList()
-        MSWA_RequestUpdateSpells()
+        self._renameKey = nil; self._renameGroupID = nil; self:Hide(); self:ClearFocus()
+        MSWA_RefreshOptionsList(); MSWA_RequestUpdateSpells()
     end
-
-    local function InlineRename_Cancel(self)
-        self._renameKey = nil
-        self._renameGroupID = nil
-        self:Hide()
-        self:ClearFocus()
-    end
-
+    local function InlineRename_Cancel(self) self._renameKey = nil; self._renameGroupID = nil; self:Hide(); self:ClearFocus() end
     inlineEdit:SetScript("OnEnterPressed", InlineRename_Commit)
     inlineEdit:SetScript("OnEscapePressed", InlineRename_Cancel)
     inlineEdit:SetScript("OnEditFocusLost", InlineRename_Cancel)
 
-    -- Show the inline edit over a specific row
-    local function ShowInlineRename(row, currentText, auraKey, groupID)
-        inlineEdit._renameKey = auraKey
-        inlineEdit._renameGroupID = groupID
-        inlineEdit:ClearAllPoints()
-        inlineEdit:SetPoint("LEFT", row.icon, "RIGHT", 4 + (row.indent or 0), 0)
-        inlineEdit:SetPoint("RIGHT", row, "RIGHT", -6, 0)
-        inlineEdit:SetText(currentText or "")
-        inlineEdit:Show()
-        inlineEdit:SetFocus()
-        inlineEdit:HighlightText()
-    end
-
-    -- Global helpers so the context menu can trigger inline rename
     function MSWA_ShowInlineRenameForKey(key, defaultText)
-        if not f.rows then return end
-        for _, row in ipairs(f.rows) do
-            if row.entryType == "AURA" and row.key == key and row:IsShown() then
-                ShowInlineRename(row, defaultText, key, nil); return
-            end
-        end
+        for i = 1, MAX_VISIBLE_ROWS do local row = f.rows[i]; if row and row:IsShown() and row.key == key then
+            inlineEdit._renameKey = key; inlineEdit._renameGroupID = nil
+            inlineEdit:ClearAllPoints(); inlineEdit:SetPoint("LEFT", row.icon, "RIGHT", 4 + (row.indent or 0), 0)
+            inlineEdit:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+            inlineEdit:SetText(defaultText or ""); inlineEdit:Show(); inlineEdit:SetFocus(); inlineEdit:HighlightText()
+            return
+        end end
     end
     function MSWA_ShowInlineRenameForGroup(gid, defaultText)
-        if not f.rows then return end
-        for _, row in ipairs(f.rows) do
-            if row.entryType == "GROUP" and row.groupID == gid and row:IsShown() then
-                ShowInlineRename(row, defaultText, nil, gid); return
-            end
-        end
+        for i = 1, MAX_VISIBLE_ROWS do local row = f.rows[i]; if row and row:IsShown() and row.entryType == "GROUP" and row.groupID == gid then
+            inlineEdit._renameKey = nil; inlineEdit._renameGroupID = gid
+            inlineEdit:ClearAllPoints(); inlineEdit:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
+            inlineEdit:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+            inlineEdit:SetText(defaultText or ""); inlineEdit:Show(); inlineEdit:SetFocus(); inlineEdit:HighlightText()
+            return
+        end end
     end
 
-    -- Double-click state (per-row tracking)
-    local lastClickRow = nil
-    local lastClickTime = 0
-    local DOUBLECLICK_THRESHOLD = 0.35
+    -- Multi-select state
+    MSWA._multiSelect = MSWA._multiSelect or {}
+    MSWA._lastClickedKey = nil
 
+    -- Create list rows
     f.rows = {}
-
-
--- Layout list row text (no inline buttons - context menu handles actions)
-local function MSWA_LayoutListRowText(row)
-    if not row or not row.text or not row.icon then return end
-    row.text:ClearAllPoints()
-    row.text:SetPoint("LEFT", row.icon, "RIGHT", 6 + (row.indent or 0), 0)
-    row.text:SetPoint("RIGHT", row, "RIGHT", -6, 0)
-end
-
-    -- Multi-select state (Shift+Click range selection)
-    MSWA._multiSelect = {}   -- key -> true
-    f._lastClickIdx = nil    -- entry index of last normal click
-    f._lastEntries = nil     -- cached entries from last UpdateAuraList
-
-    local function ClearMultiSelect()
-        wipe(MSWA._multiSelect)
-        f._lastClickIdx = nil
-    end
-
-    local function MultiSelectCount()
-        local n = 0
-        for _ in pairs(MSWA._multiSelect) do n = n + 1 end
-        return n
-    end
-
-    local function GetEntryIdx(entries, key)
-        if not entries or not key then return nil end
-        for i = 1, #entries do
-            if entries[i].entryType == "AURA" and entries[i].key == key then return i end
-        end
-        return nil
-    end
-
     for i = 1, MAX_VISIBLE_ROWS do
-        local row = CreateFrame("Button", "MSWA_AuraRow" .. i, listPanel)
-        row:SetSize(282, rowHeight); row:SetPoint("TOPLEFT", 8, -24 - (i - 1) * rowHeight)
-        row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        local row = CreateFrame("Button", nil, listPanel)
+        row:SetSize(270, rowHeight); row:SetPoint("TOPLEFT", scrollFrame, "TOPLEFT", 4, -((i - 1) * rowHeight))
+        row:EnableMouse(true); row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 
-        row.icon = row:CreateTexture(nil, "ARTWORK"); row.icon:SetSize(20, 20); row.icon:SetPoint("LEFT")
-        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        row.text:SetPoint("LEFT", row.icon, "RIGHT", 6, 0); row.text:SetPoint("RIGHT", row, "RIGHT", -6, 0); row.text:SetJustifyH("LEFT")
+        row.icon = row:CreateTexture(nil, "ARTWORK"); row.icon:SetSize(20, 20); row.icon:SetPoint("LEFT", 2, 0)
+        row.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.text:SetPoint("LEFT", row.icon, "RIGHT", 4, 0); row.text:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+        row.text:SetJustifyH("LEFT"); W.SkinText(row.text)
 
-        row.sepTop = row:CreateTexture(nil, "BORDER"); row.sepTop:SetColorTexture(1, 1, 1, 0.12)
-        row.sepTop:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0); row.sepTop:SetPoint("TOPRIGHT", row, "TOPRIGHT", 0, 0)
-        row.sepTop:SetHeight(1); row.sepTop:Hide()
+        row.selectedTex = row:CreateTexture(nil, "BACKGROUND")
+        row.selectedTex:SetAllPoints(); row.selectedTex:SetColorTexture(T.accentR, T.accentG, T.accentB, 0.35); row.selectedTex:Hide()
+        row.multiSelTex = row:CreateTexture(nil, "BACKGROUND", nil, 1)
+        row.multiSelTex:SetAllPoints(); row.multiSelTex:SetColorTexture(0, 0.8, 0.8, 0.15); row.multiSelTex:Hide()
 
-        row.sepBottom = row:CreateTexture(nil, "BORDER"); row.sepBottom:SetColorTexture(1, 1, 1, 0.12)
-        row.sepBottom:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 0, 0); row.sepBottom:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
-        row.sepBottom:SetHeight(1); row.sepBottom:Hide()
+        row.dragInsertTop = row:CreateTexture(nil, "OVERLAY"); row.dragInsertTop:SetHeight(2)
+        row.dragInsertTop:SetPoint("TOPLEFT", 0, 1); row.dragInsertTop:SetPoint("TOPRIGHT", 0, 1)
+        row.dragInsertTop:SetColorTexture(T.accentR, T.accentG, T.accentB, 0.9); row.dragInsertTop:Hide()
+        row.dragInsertBot = row:CreateTexture(nil, "OVERLAY"); row.dragInsertBot:SetHeight(2)
+        row.dragInsertBot:SetPoint("BOTTOMLEFT", 0, -1); row.dragInsertBot:SetPoint("BOTTOMRIGHT", 0, -1)
+        row.dragInsertBot:SetColorTexture(T.accentR, T.accentG, T.accentB, 0.9); row.dragInsertBot:Hide()
 
-        row.selectedTex = row:CreateTexture(nil, "BACKGROUND"); row.selectedTex:SetAllPoints(true)
-        row.selectedTex:SetColorTexture(1, 1, 0, 0.15); row.selectedTex:Hide()
+        row.sepTop = row:CreateTexture(nil, "ARTWORK"); row.sepTop:SetHeight(1)
+        row.sepTop:SetPoint("TOPLEFT", 0, 0); row.sepTop:SetPoint("TOPRIGHT", 0, 0)
+        row.sepTop:SetColorTexture(T.edgeR, T.edgeG, T.edgeB, 0.4); row.sepTop:Hide()
+        row.sepBottom = row:CreateTexture(nil, "ARTWORK"); row.sepBottom:SetHeight(1)
+        row.sepBottom:SetPoint("BOTTOMLEFT", 0, 0); row.sepBottom:SetPoint("BOTTOMRIGHT", 0, 0)
+        row.sepBottom:SetColorTexture(T.edgeR, T.edgeG, T.edgeB, 0.4); row.sepBottom:Hide()
 
-        -- Multi-select highlight (cyan tint, distinct from single-select yellow)
-        row.multiSelTex = row:CreateTexture(nil, "BACKGROUND"); row.multiSelTex:SetAllPoints(true)
-        row.multiSelTex:SetColorTexture(0.2, 0.6, 1, 0.2); row.multiSelTex:Hide()
+        row.entryType = nil; row.groupID = nil; row.key = nil; row.indent = 0
 
-        -- Drag insert indicator (bright line above or below row)
-        row.dragInsertTop = row:CreateTexture(nil, "OVERLAY")
-        row.dragInsertTop:SetHeight(2); row.dragInsertTop:SetColorTexture(0.2, 0.8, 1, 0.9)
-        row.dragInsertTop:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 1); row.dragInsertTop:SetPoint("TOPRIGHT", row, "TOPRIGHT", 0, 1)
-        row.dragInsertTop:Hide()
+        -- Hover
+        row:SetScript("OnEnter", function(self)
+            if not self.selectedTex:IsShown() then
+                self.selectedTex:SetColorTexture(1, 1, 1, 0.06); self.selectedTex:Show()
+            end
+        end)
+        row:SetScript("OnLeave", function(self)
+            local isSelected = (MSWA.selectedSpellID ~= nil and MSWA.selectedSpellID == self.key) or (MSWA.selectedGroupID and MSWA.selectedGroupID == self.groupID and self.entryType == "GROUP")
+            if not isSelected then self.selectedTex:Hide() end
+        end)
 
-        row.dragInsertBot = row:CreateTexture(nil, "OVERLAY")
-        row.dragInsertBot:SetHeight(2); row.dragInsertBot:SetColorTexture(0.2, 0.8, 1, 0.9)
-        row.dragInsertBot:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 0, -1); row.dragInsertBot:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, -1)
-        row.dragInsertBot:Hide()
-
-        row.isMSWARow = true; row.entryType = nil; row.groupID = nil; row.key = nil; row.indent = 0; row.spellID = nil
-
-        row:RegisterForClicks("AnyUp"); row:RegisterForDrag("LeftButton")
-        row:SetScript("OnDragStart", function(self) if self.entryType == "AURA" and self.key ~= nil then MSWA_BeginListDrag(self.key) end end)
-        row:SetScript("OnDragStop", function(self) if MSWA._isDraggingList then MSWA_EndListDrag() end end)
-
+        -- Click
         row:SetScript("OnClick", function(self, button)
-            if MSWA._isDraggingList then return end
-
-            -- Right-click: context menu (works with multi-select)
-            if button == "RightButton" then
-                -- If right-clicking an aura NOT in multi-select, or a non-aura row, clear multi-select
-                if MultiSelectCount() > 0 then
-                    local keepMulti = self.entryType == "AURA" and self.key and MSWA._multiSelect[self.key]
-                    if not keepMulti then
-                        ClearMultiSelect()
-                        MSWA_RefreshOptionsList()
-                    end
-                end
-                MSWA_ShowListContextMenu(self)
-                return
-            end
-
-            local now = GetTime()
-            local isDoubleClick = (lastClickRow == self) and (now - lastClickTime) < DOUBLECLICK_THRESHOLD
-            lastClickRow = self
-            lastClickTime = now
-
-            -- Shift+Click: range select auras
-            if IsShiftKeyDown() and self.entryType == "AURA" and self.key ~= nil and f._lastClickIdx and f._lastEntries then
-                local entries = f._lastEntries
-                local clickIdx = GetEntryIdx(entries, self.key)
-                if clickIdx then
-                    local fromIdx = math.min(f._lastClickIdx, clickIdx)
-                    local toIdx   = math.max(f._lastClickIdx, clickIdx)
-                    for ei = fromIdx, toIdx do
-                        local e = entries[ei]
-                        if e and e.entryType == "AURA" and e.key ~= nil then
-                            MSWA._multiSelect[e.key] = true
-                        end
-                    end
-                    -- Ensure the anchor aura is also in multi-select
-                    if MSWA.selectedSpellID then
-                        MSWA._multiSelect[MSWA.selectedSpellID] = true
-                    end
-                    MSWA_RefreshOptionsList()
-                    return
-                end
-            end
-
+            if button == "RightButton" then MSWA_ShowListContextMenu(self); return end
             if self.entryType == "AURA" and self.key ~= nil then
-                ClearMultiSelect()
-                if isDoubleClick then
-                    -- Double-click: inline rename
-                    local db = MSWA_GetDB()
-                    local currentName = (db.customNames and db.customNames[self.key]) or ""
-                    if currentName == "" then currentName = MSWA_GetDisplayNameForKey(self.key) or "" end
-                    ShowInlineRename(self, currentName, self.key, nil)
-                    return
+                -- Shift-click: range select
+                if IsShiftKeyDown() and MSWA._lastClickedKey then
+                    -- multi-select range (simplified)
+                    MSWA._multiSelect[self.key] = true
+                elseif IsControlKeyDown() then
+                    -- Ctrl: toggle multi-select
+                    local ms = MSWA._multiSelect
+                    ms[self.key] = not ms[self.key] or nil
+                else
+                    -- Normal click
+                    wipe(MSWA._multiSelect)
+                    MSWA.selectedSpellID = self.key; MSWA.selectedGroupID = self.groupID
+                    if not _currentPageKey then SwitchPage("trigger") end
                 end
-                -- Track entry index for shift-range
-                if f._lastEntries then
-                    f._lastClickIdx = GetEntryIdx(f._lastEntries, self.key)
-                end
-                MSWA.selectedSpellID = self.key; MSWA.selectedGroupID = nil; MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList(); return
-            end
-            if self.entryType == "GROUP" and self.groupID then
-                ClearMultiSelect()
-                if isDoubleClick then
-                    -- Double-click: inline rename group
-                    local db = MSWA_GetDB()
-                    local g = db.groups and db.groups[self.groupID]
-                    local currentName = (g and g.name) or ""
-                    ShowInlineRename(self, currentName, nil, self.groupID)
-                    return
-                end
-                MSWA.selectedGroupID = self.groupID; MSWA.selectedSpellID = nil; MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList(); return
-            end
-            if self.entryType == "UNGROUPED" then
-                ClearMultiSelect()
-                MSWA.selectedSpellID = nil; MSWA.selectedGroupID = nil; MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
+                MSWA._lastClickedKey = self.key
+                f:UpdateAuraList()
+            elseif self.entryType == "GROUP" and self.groupID then
+                wipe(MSWA._multiSelect)
+                MSWA.selectedSpellID = nil; MSWA.selectedGroupID = self.groupID
+                f:UpdateAuraList()
             end
         end)
 
         f.rows[i] = row
     end
 
-    -----------------------------------------------------------
-    -- Drag reorder system
-    -----------------------------------------------------------
-
-    -- Hide all drag insert indicators
-    local function HideDragIndicators()
-        for _, r in ipairs(f.rows) do
-            if r.dragInsertTop then r.dragInsertTop:Hide() end
-            if r.dragInsertBot then r.dragInsertBot:Hide() end
-        end
-        MSWA._dragDropTarget = nil
-        MSWA._dragDropAfter  = nil
+    -- Helper for row text layout
+    function MSWA_LayoutListRowText(row)
+        row.text:ClearAllPoints()
+        row.text:SetPoint("LEFT", row.icon, "RIGHT", 4 + (row.indent or 0), 0)
+        row.text:SetPoint("RIGHT", row, "RIGHT", -4, 0)
     end
 
-    -- Insert aura at a specific position relative to a target aura
-    function MSWA_InsertAuraAtPosition(dragKey, targetKey, insertAfter)
-        if dragKey == nil or targetKey == nil or dragKey == targetKey then return end
-        local db = MSWA_GetDB()
-        db.auraGroups = db.auraGroups or {}
-        db.groupMembers = db.groupMembers or {}
-        db.spellSettings = db.spellSettings or {}
-
-        local targetGid = db.auraGroups[targetKey]
-        local dragGid   = db.auraGroups[dragKey]
-
-        if targetGid and db.groups and db.groups[targetGid] then
-            -- Target is in a group: insert drag key into that group
-            -- Remove from previous group's member list
-            if dragGid and dragGid ~= targetGid and db.groupMembers[dragGid] then
-                for i = #db.groupMembers[dragGid], 1, -1 do
-                    if db.groupMembers[dragGid][i] == dragKey then
-                        table.remove(db.groupMembers[dragGid], i); break
-                    end
-                end
-            end
-
-            -- Assign to target group
-            db.auraGroups[dragKey] = targetGid
-            local s = db.spellSettings[dragKey] or {}
-            s.anchorFrame = nil
-            db.spellSettings[dragKey] = s
-
-            local members = MSWA_EnsureGroupMembers(targetGid) or {}
-            -- Remove dragKey if already present
-            for i = #members, 1, -1 do
-                if members[i] == dragKey then table.remove(members, i); break end
-            end
-            -- Find target index
-            local targetIdx = nil
-            for i = 1, #members do
-                if members[i] == targetKey then targetIdx = i; break end
-            end
-            if not targetIdx then targetIdx = #members end
-            local newIdx = insertAfter and (targetIdx + 1) or targetIdx
-            table.insert(members, newIdx, dragKey)
-
-            -- Recalculate x/y for all members in the group
-            local group = db.groups[targetGid]
-            local size = (group and group.size) or MSWA.ICON_SIZE
-            for i = 1, #members do
-                local ms = db.spellSettings[members[i]] or {}
-                ms.x = (i - 1) * (size + MSWA.ICON_SPACE)
-                ms.y = 0
-                ms.width  = ms.width  or size
-                ms.height = ms.height or size
-                db.spellSettings[members[i]] = ms
-            end
-            -- Also recalculate old group if changed groups
-            if dragGid and dragGid ~= targetGid and db.groupMembers[dragGid] then
-                local oldGroup = db.groups[dragGid]
-                local oldSize = (oldGroup and oldGroup.size) or MSWA.ICON_SIZE
-                local oldMembers = db.groupMembers[dragGid]
-                for i = 1, #oldMembers do
-                    local ms = db.spellSettings[oldMembers[i]] or {}
-                    ms.x = (i - 1) * (oldSize + MSWA.ICON_SPACE)
-                    ms.y = 0
-                    db.spellSettings[oldMembers[i]] = ms
-                end
-            end
-        else
-            -- Target is ungrouped: remove drag from its group, place ungrouped
-            if dragGid and db.groupMembers[dragGid] then
-                for i = #db.groupMembers[dragGid], 1, -1 do
-                    if db.groupMembers[dragGid][i] == dragKey then
-                        table.remove(db.groupMembers[dragGid], i); break
-                    end
-                end
-                -- Recalculate old group
-                local oldGroup = db.groups and db.groups[dragGid]
-                local oldSize = (oldGroup and oldGroup.size) or MSWA.ICON_SIZE
-                local oldMembers = db.groupMembers[dragGid]
-                for i = 1, #oldMembers do
-                    local ms = db.spellSettings[oldMembers[i]] or {}
-                    ms.x = (i - 1) * (oldSize + MSWA.ICON_SPACE)
-                    ms.y = 0
-                    db.spellSettings[oldMembers[i]] = ms
-                end
-            end
-            -- Preserve position offset when leaving group
-            local s = db.spellSettings[dragKey] or {}
-            if dragGid and db.groups and db.groups[dragGid] then
-                local g = db.groups[dragGid]
-                s.x = (s.x or 0) + (g.x or 0)
-                s.y = (s.y or 0) + (g.y or 0)
-                if g.anchorFrame and g.anchorFrame ~= "" then s.anchorFrame = g.anchorFrame end
-            end
-            db.spellSettings[dragKey] = s
-            db.auraGroups[dragKey] = nil
-        end
-    end
-
-    -- Hook drag overlay OnUpdate to show insert indicators on hovered rows
-    local function DragOverlay_OnUpdate_Hook()
-        if not MSWA._isDraggingList or not MSWA._dragKey then
-            HideDragIndicators(); return
-        end
-        HideDragIndicators()
-
-        local focus = MSWA_GetMouseFocusFrame and MSWA_GetMouseFocusFrame() or nil
-        local row = focus and MSWA_FindMSWARowFromFocus(focus) or nil
-        if not row or not row:IsShown() then return end
-
-        -- Only show insert indicator on aura rows and group/ungrouped headers
-        if row.entryType == "GROUP" or row.entryType == "UNGROUPED" then
-            -- Existing group/ungroup drop (highlight the row)
-            row.dragInsertBot:Show()
-            MSWA._dragDropTarget = row
-            MSWA._dragDropAfter  = nil
-            return
-        end
-
-        if row.entryType ~= "AURA" or row.key == nil then return end
-        if row.key == MSWA._dragKey then return end  -- don't show on self
-
-        -- Determine top/bottom half of row
-        local _, rowY = row:GetCenter()
-        local _, cursorY = GetCursorPosition()
-        local scale = row:GetEffectiveScale() or 1
-        cursorY = cursorY / scale
-
-        local insertAfter = cursorY < rowY
-        if insertAfter then
-            row.dragInsertBot:Show()
-        else
-            row.dragInsertTop:Show()
-        end
-        MSWA._dragDropTarget = row
-        MSWA._dragDropAfter  = insertAfter
-    end
-
-    -- Hook the overlay once it's created
-    local origBeginDrag = MSWA_BeginListDrag
-    function MSWA_BeginListDrag(key)
-        origBeginDrag(key)
-        -- Attach our indicator update to the overlay
-        local overlay = MSWA.dragOverlay
-        if overlay and not overlay._mswaHooked then
-            local origOnUpdate = overlay:GetScript("OnUpdate")
-            overlay:SetScript("OnUpdate", function(self, ...)
-                if origOnUpdate then origOnUpdate(self, ...) end
-                DragOverlay_OnUpdate_Hook()
-            end)
-            overlay._mswaHooked = true
-        end
-    end
-
-    -- Override EndListDrag to handle aura-to-aura drops
-    function MSWA_EndListDrag()
-        local overlay = MSWA.dragOverlay
-        local key = MSWA._dragKey
-        local dropTarget = MSWA._dragDropTarget
-        local dropAfter  = MSWA._dragDropAfter
-
-        MSWA._dragKey = nil
-        MSWA._isDraggingList = false
-        MSWA._dragDropTarget = nil
-        MSWA._dragDropAfter  = nil
-
-        HideDragIndicators()
-
-        if overlay then
-            overlay:Hide()
-            if overlay._iconFrame then overlay._iconFrame:Hide() end
-        end
-        if not key then return end
-
-        pcall(function()
-            -- Use our stored drop target first (accurate indicator-based)
-            local row = dropTarget
-            if not row then
-                -- Fallback to mouse focus
-                local focus = MSWA_GetMouseFocusFrame and MSWA_GetMouseFocusFrame() or nil
-                row = focus and MSWA_FindMSWARowFromFocus(focus) or nil
-            end
-
-            if not row then return end
-
-            if row.entryType == "AURA" and row.key ~= nil and row.key ~= key then
-                -- Aura-to-aura: reorder/move
-                MSWA_InsertAuraAtPosition(key, row.key, dropAfter)
-            elseif row.entryType == "GROUP" and row.groupID then
-                -- Drop on group header: add to end (existing behavior)
-                MSWA_SetAuraGroup(key, row.groupID)
-            elseif row.entryType == "UNGROUPED" then
-                -- Drop on ungrouped: remove from group
-                MSWA_SetAuraGroup(key, nil)
-            end
-        end)
-
-        if f and f.UpdateAuraList then pcall(function() f:UpdateAuraList() end) end
-        if MSWA_RequestUpdateSpells then pcall(MSWA_RequestUpdateSpells) end
-    end
-
-    -- UpdateAuraList method
+    -- UpdateAuraList
     function f:UpdateAuraList()
-        -- Hide inline rename if active
         if f.inlineEdit and f.inlineEdit:IsShown() then
-            f.inlineEdit._renameKey = nil
-            f.inlineEdit._renameGroupID = nil
-            f.inlineEdit:Hide()
-            f.inlineEdit:ClearFocus()
+            f.inlineEdit._renameKey = nil; f.inlineEdit._renameGroupID = nil; f.inlineEdit:Hide(); f.inlineEdit:ClearFocus()
         end
         local db = MSWA_GetDB()
         local entries = MSWA_BuildListEntries()
-        f._lastEntries = entries  -- cache for shift-range selection
+        f._lastEntries = entries
         local selectedKey = MSWA.selectedSpellID
         local selectedGroup = MSWA.selectedGroupID
         local multiSel = MSWA._multiSelect
@@ -1664,9 +1435,7 @@ end
         local offset = FauxScrollFrame_GetOffset(scrollFrame) or 0
 
         for i = 1, visibleRows do
-            local row = self.rows[i]
-            local idx = offset + i
-            local entry = entries[idx]
+            local row = self.rows[i]; local idx = offset + i; local entry = entries[idx]
             if entry then
                 row.entryType = entry.entryType; row.groupID = entry.groupID; row.key = entry.key; row.indent = entry.indent or 0
                 row:Show(); row.selectedTex:Hide(); row.multiSelTex:Hide(); row.dragInsertTop:Hide(); row.dragInsertBot:Hide()
@@ -1674,20 +1443,17 @@ end
                 row.icon:SetTexture(nil); row:SetAlpha(1)
                 if row.icon.SetDesaturated then row.icon:SetDesaturated(false) end
                 MSWA_LayoutListRowText(row)
-                if entry.groupStart and row.sepTop then
-                    row.sepTop:SetHeight(entry.thickTop and 2 or 1); row.sepTop:Show()
-                end
-                if entry.groupEnd and row.sepBottom then
-                    row.sepBottom:SetHeight(entry.thickBottom and 2 or 1); row.sepBottom:Show()
-                end
+                if entry.groupStart and row.sepTop then row.sepTop:SetHeight(entry.thickTop and 2 or 1); row.sepTop:Show() end
+                if entry.groupEnd and row.sepBottom then row.sepBottom:SetHeight(entry.thickBottom and 2 or 1); row.sepBottom:Show() end
+
                 if entry.entryType == "GROUP" then
                     local g = db.groups and db.groups[entry.groupID] or nil
                     row.text:SetText(g and g.name or "Group"); row.icon:SetTexture(nil)
-                    if selectedGroup and selectedGroup == entry.groupID then row.selectedTex:Show() end
+                    if selectedGroup and selectedGroup == entry.groupID then row.selectedTex:SetColorTexture(T.accentR, T.accentG, T.accentB, 0.35); row.selectedTex:Show() end
                 elseif entry.entryType == "UNGROUPED" then
-                    row.text:SetText("Ungrouped"); row.icon:SetTexture(nil)
+                    row.text:SetText("|cff888888Ungrouped|r"); row.icon:SetTexture(nil)
                 elseif entry.entryType == "NOTLOADED" then
-                    row.text:SetText("Not Loaded"); row.icon:SetTexture(nil)
+                    row.text:SetText("|cff666666Not Loaded|r"); row.icon:SetTexture(nil)
                 else
                     local key = entry.key
                     local icon = MSWA_GetIconForKey(key)
@@ -1697,37 +1463,29 @@ end
                     local displayName = abPrefix .. (name or "Unknown")
                     if entry.notLoaded then
                         local suffix = ""
-                        if entry.groupID then
-                            local g2 = db.groups and db.groups[entry.groupID] or nil
-                            if g2 and g2.name then suffix = " |cff666666(" .. g2.name .. ")|r" end
-                        end
-                        row.text:SetText("|cff888888" .. displayName .. "|r" .. suffix)
-                        row:SetAlpha(0.55)
+                        if entry.groupID then local g2 = db.groups and db.groups[entry.groupID]; if g2 and g2.name then suffix = " |cff666666(" .. g2.name .. ")|r" end end
+                        row.text:SetText("|cff888888" .. displayName .. "|r" .. suffix); row:SetAlpha(0.55)
                         if row.icon.SetDesaturated then row.icon:SetDesaturated(true) end
                     else
                         row.text:SetText(displayName); row:SetAlpha(1)
-                        if row.icon.SetDesaturated then row.icon:SetDesaturated(false) end
                     end
-                    row.icon:SetTexture(icon); row.text:SetText(displayName)
-                    if selectedKey ~= nil and selectedKey == key then row.selectedTex:Show() end
-                    -- Multi-select highlight (cyan)
+                    row.icon:SetTexture(icon)
+                    if selectedKey ~= nil and selectedKey == key then row.selectedTex:SetColorTexture(T.accentR, T.accentG, T.accentB, 0.35); row.selectedTex:Show() end
                     if key and multiSel[key] then row.multiSelTex:Show() end
                 end
             else
-                row.entryType = nil; row.groupID = nil; row.key = nil; row.indent = 0; row.spellID = nil
-                row.icon:SetTexture(nil); row.text:SetText(""); row.selectedTex:Hide(); row.multiSelTex:Hide(); row.dragInsertTop:Hide(); row.dragInsertBot:Hide()
+                row.entryType = nil; row.groupID = nil; row.key = nil; row.indent = 0
+                row.icon:SetTexture(nil); row.text:SetText(""); row.selectedTex:Hide(); row.multiSelTex:Hide()
+                row.dragInsertTop:Hide(); row.dragInsertBot:Hide()
                 if row.sepTop then row.sepTop:Hide() end; if row.sepBottom then row.sepBottom:Hide() end
                 row:Hide()
             end
         end
-        -- Hide extra pre-created rows beyond current visibleRows
         for i = visibleRows + 1, MAX_VISIBLE_ROWS do
-            local row = self.rows[i]
-            if row then
-                row.entryType = nil; row.groupID = nil; row.key = nil; row.indent = 0; row.spellID = nil
-                row.icon:SetTexture(nil); row.text:SetText(""); row.selectedTex:Hide(); row.multiSelTex:Hide(); row.dragInsertTop:Hide(); row.dragInsertBot:Hide()
-                if row.sepTop then row.sepTop:Hide() end; if row.sepBottom then row.sepBottom:Hide() end
-                row:Hide()
+            local row = self.rows[i]; if row then
+                row.entryType = nil; row.groupID = nil; row.key = nil; row.icon:SetTexture(nil); row.text:SetText("")
+                row.selectedTex:Hide(); row.multiSelTex:Hide(); row.dragInsertTop:Hide(); row.dragInsertBot:Hide()
+                if row.sepTop then row.sepTop:Hide() end; if row.sepBottom then row.sepBottom:Hide() end; row:Hide()
             end
         end
         MSWA_UpdateDetailPanel()
@@ -1739,3079 +1497,175 @@ end
         FauxScrollFrame_OnVerticalScroll(self, current - (delta * rowHeight * 3), rowHeight, function() f:UpdateAuraList() end)
     end)
 
-    ---------------------------------------------------
-    -- Right: Editor (identical structure to original)
-    ---------------------------------------------------
-    -- NOTE: The full right-panel editor (General/Display/Load Info tabs,
-    -- group panel, all edit boxes, dropdowns, color pickers, etc.)
-    -- is built IDENTICALLY to the original MidnightSimpleAuras.lua
-    -- lines 3815-5352. The code is very long (~1500 lines of pure UI
-    -- construction) and is included verbatim below.
-    ---------------------------------------------------
+    -- ════════════════════════════════════════════════════
+    -- NAV RAIL (vertical tab icons)
+    -- ════════════════════════════════════════════════════
+    local navRail = CreateFrame("Frame", nil, content, "BackdropTemplate")
+    navRail:SetPoint("TOPLEFT", listPanel, "TOPRIGHT", 6, 0)
+    navRail:SetPoint("BOTTOMLEFT", listPanel, "BOTTOMRIGHT", 6, 0)
+    navRail:SetWidth(NAV_WIDTH)
+    W.ApplyBackdrop(navRail, 0.22)
+    f.navRail = navRail
 
-    local rightPanel = CreateFrame("Frame", nil, f, "InsetFrameTemplate3")
-    rightPanel:SetPoint("TOPLEFT", listPanel, "TOPRIGHT", 12, 0)
-    rightPanel:SetPoint("BOTTOMRIGHT", -12, 110)
-    f.rightPanel = rightPanel
-
-    f.splitLine = f:CreateTexture(nil, "BORDER")
-    f.splitLine:SetPoint("TOPLEFT", listPanel, "TOPRIGHT", 6, -2)
-    f.splitLine:SetPoint("BOTTOMLEFT", listPanel, "BOTTOMRIGHT", 6, 2)
-    f.splitLine:SetWidth(1); f.splitLine:SetColorTexture(1, 1, 1, 0.10)
-
-    f.rightTitle = rightPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    f.rightTitle:SetPoint("TOP", 0, -10); f.rightTitle:SetText("Select an Aura")
-
-    local tabW, tabH = 80, 20
-    local function SetActiveTab(tabKey)
-        f.activeTab = tabKey
-        if f.tabGeneral then f.tabGeneral:UnlockHighlight() end
-        if f.tabDisplay then f.tabDisplay:UnlockHighlight() end
-        if f.tabGlow then f.tabGlow:UnlockHighlight() end
-        if f.tabImport then f.tabImport:UnlockHighlight() end
-        if tabKey == "GENERAL" and f.tabGeneral then f.tabGeneral:LockHighlight() end
-        if tabKey == "DISPLAY" and f.tabDisplay then f.tabDisplay:LockHighlight() end
-        if tabKey == "GLOW" and f.tabGlow then f.tabGlow:LockHighlight() end
-        if tabKey == "IMPORT" and f.tabImport then f.tabImport:LockHighlight() end
-        MSWA_UpdateDetailPanel()
+    local yPos = -6
+    for _, nav in ipairs(NAV_PAGES) do
+        local btn = W.NavButton(navRail, nav.label, NAV_WIDTH - 10, NAV_BTN_H, false, function() SwitchPage(nav.key) end)
+        btn:SetPoint("TOPLEFT", navRail, "TOPLEFT", 5, yPos)
+        _navButtons[nav.key] = btn
+        yPos = yPos - NAV_BTN_H - NAV_BTN_GAP
     end
 
-    f.tabGeneral = CreateFrame("Button", nil, rightPanel, "UIPanelButtonTemplate"); f.tabGeneral:SetSize(tabW, tabH)
-    f.tabGeneral:SetPoint("TOPLEFT", 14, -36); f.tabGeneral:SetText("General")
-    f.tabDisplay = CreateFrame("Button", nil, rightPanel, "UIPanelButtonTemplate"); f.tabDisplay:SetSize(tabW, tabH)
-    f.tabDisplay:SetPoint("LEFT", f.tabGeneral, "RIGHT", 4, 0); f.tabDisplay:SetText("Display")
-    f.tabGlow = CreateFrame("Button", nil, rightPanel, "UIPanelButtonTemplate"); f.tabGlow:SetSize(tabW, tabH)
-    f.tabGlow:SetPoint("LEFT", f.tabDisplay, "RIGHT", 4, 0); f.tabGlow:SetText("Glow")
-    f.tabImport = CreateFrame("Button", nil, rightPanel, "UIPanelButtonTemplate"); f.tabImport:SetSize(tabW, tabH)
-    f.tabImport:SetPoint("LEFT", f.tabGlow, "RIGHT", 4, 0); f.tabImport:SetText("Load Info")
+    -- ════════════════════════════════════════════════════
+    -- PAGE HOST (right panel)
+    -- ════════════════════════════════════════════════════
+    _pageHost = CreateFrame("Frame", nil, content)
+    _pageHost:SetPoint("TOPLEFT", navRail, "TOPRIGHT", 6, 0)
+    _pageHost:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 0, 0)
 
-    f.tabGeneral:SetScript("OnClick", function() SetActiveTab("GENERAL") end)
-    f.tabDisplay:SetScript("OnClick", function() SetActiveTab("DISPLAY") end)
-    f.tabGlow:SetScript("OnClick", function() SetActiveTab("GLOW") end)
-    f.tabImport:SetScript("OnClick", function() SetActiveTab("IMPORT") end)
-    f.activeTab = "GENERAL"; f.tabGeneral:LockHighlight()
+    f.rightTitle = _pageHost:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    f.rightTitle:SetPoint("TOPLEFT", _pageHost, "TOPLEFT", 12, -6); f.rightTitle:SetText("Select an Aura"); W.SkinTitle(f.rightTitle)
 
-    f.emptyPanel = CreateFrame("Frame", nil, rightPanel)
-    f.emptyPanel:SetPoint("TOPLEFT", 12, -60); f.emptyPanel:SetPoint("BOTTOMRIGHT", -12, 12)
-    f.emptyText = f.emptyPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    f.emptyText:SetPoint("CENTER", 0, 0); f.emptyText:SetText("Select an aura from the list on the left to edit it.")
+    -- Empty panel
+    f.emptyPanel = CreateFrame("Frame", nil, content)
+    f.emptyPanel:SetPoint("TOPLEFT", navRail, "TOPRIGHT", 6, 0)
+    f.emptyPanel:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 0, 0)
+    W.ApplyBackdrop(f.emptyPanel, 0.25)
+    local emptyText = f.emptyPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    emptyText:SetPoint("CENTER", 0, 0); emptyText:SetText("Select an aura from the list to edit."); W.SkinMuted(emptyText)
 
-    -- Load Info (altPanel)
-    f.altPanel = CreateFrame("Frame", nil, rightPanel)
-    f.altPanel:SetPoint("TOPLEFT", 12, -60); f.altPanel:SetPoint("BOTTOMRIGHT", -12, 12); f.altPanel:Hide()
+    -- Group panel (shown when group header selected)
+    f.groupPanel = CreateFrame("Frame", nil, content, "BackdropTemplate")
+    f.groupPanel:SetPoint("TOPLEFT", navRail, "TOPRIGHT", 6, 0)
+    f.groupPanel:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 0, 0)
+    f.groupPanel:Hide()
+    W.ApplyBackdrop(f.groupPanel, 0.35)
 
-    -- Scroll frame inside altPanel (prevents clipping on small windows)
-    local altScroll = CreateFrame("ScrollFrame", "MSWA_LoadInfoScrollFrame", f.altPanel, "UIPanelScrollFrameTemplate")
-    altScroll:SetPoint("TOPLEFT", 0, 0)
-    altScroll:SetPoint("BOTTOMRIGHT", -26, 0)
-    f._altScroll = altScroll
-
-    local altContent = CreateFrame("Frame")
-    altContent:SetWidth(400)
-    altScroll:SetScrollChild(altContent)
-    f._altContent = altContent
-
-    altScroll:SetScript("OnSizeChanged", function(self, w)
-        if w and w > 30 then altContent:SetWidth(w) end
+    local gpTitle = W.Title(f.groupPanel, "Group Settings", 12, -10)
+    local gpNameLabel = W.Label(f.groupPanel, "Name:", "TOPLEFT", gpTitle, "BOTTOMLEFT", 0, -12)
+    f.groupNameEdit = W.EditBox(f.groupPanel, 220, 22); f.groupNameEdit:SetPoint("LEFT", gpNameLabel, "RIGHT", 10, 0)
+    f.groupNameEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus()
+        local db = MSWA_GetDB(); local gid = MSWA.selectedGroupID; local g = gid and db.groups and db.groups[gid]
+        if g then g.name = self:GetText() or g.name; MSWA_RefreshOptionsList() end
     end)
 
-    f.altTitle = altContent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    f.altTitle:SetPoint("TOPLEFT", altContent, "TOPLEFT", 16, -16); f.altTitle:SetText("|cffffcc00Load settings|r")
+    local gpXLabel = W.Label(f.groupPanel, "X:", "TOPLEFT", gpNameLabel, "BOTTOMLEFT", 0, -12)
+    f.groupXEdit = W.EditBox(f.groupPanel, 70, 22); f.groupXEdit:SetPoint("LEFT", gpXLabel, "RIGHT", 8, 0)
+    local gpYLabel = W.Label(f.groupPanel, "Y:", "LEFT", f.groupXEdit, "RIGHT", 12, 0)
+    f.groupYEdit = W.EditBox(f.groupPanel, 70, 22); f.groupYEdit:SetPoint("LEFT", gpYLabel, "RIGHT", 8, 0)
+    local gpSizeLabel = W.Label(f.groupPanel, "Icon size:", "TOPLEFT", gpXLabel, "BOTTOMLEFT", 0, -12)
+    f.groupSizeEdit = W.EditBox(f.groupPanel, 70, 22); f.groupSizeEdit:SetPoint("LEFT", gpSizeLabel, "RIGHT", 8, 0)
+    local gpAnchorLabel = W.Label(f.groupPanel, "Anchor:", "TOPLEFT", gpSizeLabel, "BOTTOMLEFT", 0, -12)
+    f.groupAnchorEdit = W.EditBox(f.groupPanel, 220, 22); f.groupAnchorEdit:SetPoint("LEFT", gpAnchorLabel, "RIGHT", 8, 0)
 
-    -- Load info helpers (player identity via MSA_LoadConditions.lua)
+    local gpGrowthDd = W.Dropdown(f.groupPanel, "Growth Direction", 150,
+        function() return {{ text="Right",value="RIGHT" },{ text="Left",value="LEFT" },{ text="Up",value="UP" },{ text="Down",value="DOWN" }} end,
+        function() local db = MSWA_GetDB(); local gid = MSWA.selectedGroupID; local g = gid and db.groups and db.groups[gid]; return g and g.growthDirection or "RIGHT" end,
+        function(v)
+            local db = MSWA_GetDB(); local gid = MSWA.selectedGroupID; local g = gid and db.groups and db.groups[gid]; if not g then return end
+            g.growthDirection = v; MSWA_RequestUpdateSpells()
+        end)
+    gpGrowthDd:SetPoint("TOPLEFT", gpAnchorLabel, "BOTTOMLEFT", 0, -12)
 
-    local function GetEffectiveModes(s)
-        if type(s) ~= "table" then return false, nil, nil, nil, nil, nil end
-        local never = (s.loadNever == true)
-        local combat, enc = s.loadCombatMode, s.loadEncounterMode
-        local char = s.loadCharName or s.loadChar
-        local class = s.loadClass
-        local spec  = s.loadSpec
-        local lm = s.loadMode
-        if lm == "NEVER" then never = true end
-        if (combat == nil or combat == "") then
-            if lm == "IN_COMBAT" or lm == "IN" then combat = "IN"
-            elseif lm == "OUT_OF_COMBAT" or lm == "OUT" then combat = "OUT" end
-        end
-        if combat == "" or combat == "ANY" then combat = nil end
-        if enc == "" or enc == "ANY" then enc = nil end
-        if type(char) == "string" then
-            char = char:gsub("^%s+", ""):gsub("%s+$", "")
-            if char == "" then char = nil end
-        else char = nil end
-        if type(class) == "string" then
-            class = class:gsub("^%s+", ""):gsub("%s+$", "")
-            if class == "" then class = nil end
-        else class = nil end
-        if spec then spec = tonumber(spec); if spec == 0 then spec = nil end
-        end
-        return never, combat, enc, char, class, spec
-    end
-    _G.MSWA_GetEffectiveModes = GetEffectiveModes
-
-    local function EnsureAuraSettings(key)
-        local db = MSWA_GetDB(); db.spellSettings = db.spellSettings or {}
-        db.spellSettings[key] = db.spellSettings[key] or {}
-        return db.spellSettings[key]
-    end
-    _G.MSWA_EnsureAuraSettings = EnsureAuraSettings
-
-    local function GetAuraSettings(key)
-        local db = MSWA_GetDB()
-        local s = select(1, MSWA_GetSpellSettings(db, key))
-        if not s and db.spellSettings then s = db.spellSettings[key] end
-        return s
-    end
-    _G.MSWA_GetAuraSettings = GetAuraSettings
-
-    local function ApplyModesToSettings(key, never, combat, enc, char, class, spec)
-        if not key then return end
-        local s = EnsureAuraSettings(key)
-        s.loadNever = (never == true) or nil
-        s.loadCombatMode = (combat == "IN" or combat == "OUT") and combat or nil
-        s.loadEncounterMode = (enc == "IN" or enc == "OUT") and enc or nil
-        if type(char) == "string" then char = char:gsub("^%s+", ""):gsub("%s+$", "") else char = "" end
-        s.loadCharName = (char ~= "" and char) or nil
-        s.loadChar = nil; s.loadMode = nil; s.loadAlways = nil
-        -- Class / Spec
-        s.loadClass = (type(class) == "string" and class ~= "") and class or nil
-        s.loadSpec  = (spec and tonumber(spec) and tonumber(spec) > 0) and tonumber(spec) or nil
-        MSWA_RequestUpdateSpells()
-        if MSWA_RefreshOptionsList and MSWA.optionsFrame and MSWA.optionsFrame:IsShown() then
-            MSWA_RefreshOptionsList()
-        end
-    end
-    _G.MSWA_ApplyModesToSettings = ApplyModesToSettings
-
-    -- Forward declarations for load controls (used in dropdown callbacks)
-    local SyncLoadControls
-
-    -- Load info controls
-    f.loadNeverCheck = CreateFrame("CheckButton", nil, altContent, "UICheckButtonTemplate")
-    f.loadNeverCheck:SetPoint("TOPLEFT", f.altTitle, "BOTTOMLEFT", -2, -12)
-    f.loadNeverCheck.text = f.loadNeverCheck:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.loadNeverCheck.text:SetPoint("LEFT", f.loadNeverCheck, "RIGHT", 4, 0)
-    f.loadNeverCheck.text:SetText("|cffff4040Never (disable)|r")
-    f.loadNeverCheck:EnableMouse(false)
-
-    f.loadNeverRow = CreateFrame("Button", nil, altContent)
-    f.loadNeverRow:SetFrameLevel(f.loadNeverCheck:GetFrameLevel() - 1)
-    f.loadNeverRow:SetPoint("TOPLEFT", f.loadNeverCheck, "TOPLEFT", 0, 0)
-    f.loadNeverRow:SetPoint("BOTTOMRIGHT", f.loadNeverCheck.text, "BOTTOMRIGHT", 0, 0)
-    f.loadNeverRow:EnableMouse(true)
-
-    f.loadCombatButton = CreateFrame("Button", nil, altContent, "UIPanelButtonTemplate")
-    f.loadCombatButton:SetSize(210, 22); f.loadCombatButton:SetPoint("TOPLEFT", f.loadNeverCheck, "BOTTOMLEFT", 22, -10)
-
-    f.loadEncounterButton = CreateFrame("Button", nil, altContent, "UIPanelButtonTemplate")
-    f.loadEncounterButton:SetSize(210, 22); f.loadEncounterButton:SetPoint("LEFT", f.loadCombatButton, "RIGHT", 12, 0)
-
-    local function UpdateCombatButtonText(btn, mode, never)
-        if not btn then return end
-        if never then btn:SetText("|cff888888Combat: Disabled|r"); return end
-        if mode == "IN" then btn:SetText("|cff00ff00Combat: In Combat|r")
-        elseif mode == "OUT" then btn:SetText("|cffff4040Combat: Out of Combat|r")
-        else btn:SetText("Combat: Any") end
-    end
-    _G.MSWA_UpdateCombatButtonText = UpdateCombatButtonText
-
-    local function UpdateEncounterButtonText(btn, mode, never)
-        if not btn then return end
-        if never then btn:SetText("|cff888888Encounter: Disabled|r"); return end
-        if mode == "IN" then btn:SetText("|cff00ff00Encounter: In Encounter|r")
-        elseif mode == "OUT" then btn:SetText("|cffff4040Encounter: Not in Encounter|r")
-        else btn:SetText("Encounter: Any") end
-    end
-    _G.MSWA_UpdateEncounterButtonText = UpdateEncounterButtonText
-
-    f.loadCharLabel = altContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.loadCharLabel:SetPoint("TOPLEFT", f.loadCombatButton, "BOTTOMLEFT", -22, -14)
-    f.loadCharLabel:SetText("|cffffcc00Character (Name-Realm):|r")
-
-    f.loadCharEdit = CreateFrame("EditBox", nil, altContent, "InputBoxTemplate")
-    f.loadCharEdit:SetSize(260, 22); f.loadCharEdit:SetAutoFocus(false)
-    f.loadCharEdit:SetPoint("LEFT", f.loadCharLabel, "RIGHT", 8, 0); f.loadCharEdit:SetTextInsets(6, 6, 0, 0)
-
-    f.loadCharMeBtn = CreateFrame("Button", nil, altContent, "UIPanelButtonTemplate")
-    f.loadCharMeBtn:SetSize(50, 22); f.loadCharMeBtn:SetPoint("LEFT", f.loadCharEdit, "RIGHT", 4, 0)
-    f.loadCharMeBtn:SetText("|cff00ff00Me|r")
-
-    -- Class dropdown
-    f.loadClassLabel = altContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.loadClassLabel:SetPoint("TOPLEFT", f.loadCharLabel, "BOTTOMLEFT", 0, -16)
-    f.loadClassLabel:SetText("|cffffcc00Class:|r")
-
-    f.loadClassDrop = CreateFrame("Frame", "MSWA_LoadClassDropDown", altContent, "UIDropDownMenuTemplate")
-    f.loadClassDrop:SetPoint("LEFT", f.loadClassLabel, "RIGHT", -10, -3)
-    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.loadClassDrop, 160) end
-
-    -- Spec dropdown
-    f.loadSpecLabel = altContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.loadSpecLabel:SetPoint("LEFT", f.loadClassDrop, "RIGHT", 4, 3)
-    f.loadSpecLabel:SetText("|cffffcc00Spec:|r")
-
-    f.loadSpecDrop = CreateFrame("Frame", "MSWA_LoadSpecDropDown", altContent, "UIDropDownMenuTemplate")
-    f.loadSpecDrop:SetPoint("LEFT", f.loadSpecLabel, "RIGHT", -10, -3)
-    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.loadSpecDrop, 160) end
-
-    -- Class dropdown init
-    UIDropDownMenu_Initialize(f.loadClassDrop, function(self, level)
-        level = level or 1
-        local key = MSWA.selectedSpellID
-        local s2 = key and GetAuraSettings(key) or {}
-        local _, _, _, _, curClass, _ = GetEffectiveModes(s2)
-
-        -- "Any" option
-        local info = UIDropDownMenu_CreateInfo()
-        info.text = "Any Class"; info.value = ""; info.checked = (curClass == nil)
-        info.func = function()
-            local k = MSWA.selectedSpellID; if not k then return end
-            local ss = GetAuraSettings(k) or {}
-            local nv, cm, em, ch, _, sp = GetEffectiveModes(ss)
-            ApplyModesToSettings(k, nv, cm, em, ch, nil, nil)  -- clear class clears spec too
-            SyncLoadControls()
-        end
-        UIDropDownMenu_AddButton(info, level)
-
-        -- All classes
-        for _, c in ipairs(MSWA_CLASS_LIST) do
-            info = UIDropDownMenu_CreateInfo()
-            info.text = ("|cff%s%s|r"):format(c.color, c.name)
-            info.value = c.token
-            info.checked = (curClass == c.token)
-            info.func = function()
-                local k = MSWA.selectedSpellID; if not k then return end
-                local ss = GetAuraSettings(k) or {}
-                local nv, cm, em, ch, _, sp = GetEffectiveModes(ss)
-                -- When changing class, reset spec (specs differ per class)
-                ApplyModesToSettings(k, nv, cm, em, ch, c.token, nil)
-                SyncLoadControls()
-            end
-            UIDropDownMenu_AddButton(info, level)
-        end
-    end)
-
-    -- Spec dropdown init
-    UIDropDownMenu_Initialize(f.loadSpecDrop, function(self, level)
-        level = level or 1
-        local key = MSWA.selectedSpellID
-        local s2 = key and GetAuraSettings(key) or {}
-        local _, _, _, _, curClass, curSpec = GetEffectiveModes(s2)
-
-        -- "Any" option
-        local info = UIDropDownMenu_CreateInfo()
-        info.text = "Any Spec"; info.value = 0; info.checked = (curSpec == nil)
-        info.func = function()
-            local k = MSWA.selectedSpellID; if not k then return end
-            local ss = GetAuraSettings(k) or {}
-            local nv, cm, em, ch, cl, _ = GetEffectiveModes(ss)
-            ApplyModesToSettings(k, nv, cm, em, ch, cl, nil)
-            SyncLoadControls()
-        end
-        UIDropDownMenu_AddButton(info, level)
-
-        -- Get class to show specs for: saved loadClass, or current player class
-        local classForSpecs = curClass or MSWA_GetPlayerClassToken()
-        local specs = classForSpecs and MSWA_SPEC_DATA[classForSpecs]
-        if specs then
-            for idx, specName in ipairs(specs) do
-                info = UIDropDownMenu_CreateInfo()
-                info.text = specName; info.value = idx
-                info.checked = (curSpec == idx)
-                info.func = function()
-                    local k = MSWA.selectedSpellID; if not k then return end
-                    local ss = GetAuraSettings(k) or {}
-                    local nv, cm, em, ch, cl, _ = GetEffectiveModes(ss)
-                    -- If no class set yet, auto-set the displayed class
-                    if not cl then cl = classForSpecs end
-                    ApplyModesToSettings(k, nv, cm, em, ch, cl, idx)
-                    SyncLoadControls()
-                end
-                UIDropDownMenu_AddButton(info, level)
-            end
-        end
-    end)
-
-    -- Helper: format class dropdown text
-    local function GetClassDropdownText(classToken)
-        if not classToken then return "Any Class" end
-        local c = MSWA_CLASS_INFO[classToken]
-        if c then return ("|cff%s%s|r"):format(c.color, c.name) end
-        return classToken
-    end
-
-    -- Helper: format spec dropdown text
-    local function GetSpecDropdownText(classToken, specIdx)
-        if not specIdx then return "Any Spec" end
-        local name = MSWA_GetSpecName(classToken, specIdx)
-        return name or "Any Spec"
-    end
-
-    SyncLoadControls = function()
-        local key = MSWA.selectedSpellID
-        if not key or (type(key) == "string" and key:find("^GROUP:")) then
-            if f.loadNeverCheck then f.loadNeverCheck:SetChecked(false) end
-            if f.loadCombatButton then f.loadCombatButton:Disable(); f.loadCombatButton:SetText("Combat: Any") end
-            if f.loadEncounterButton then f.loadEncounterButton:Disable(); f.loadEncounterButton:SetText("Encounter: Any") end
-            if f.loadCharEdit then f.loadCharEdit:Disable(); f.loadCharEdit:SetText("") end
-            if f.loadCharMeBtn then f.loadCharMeBtn:Disable() end
-            if f.loadClassDrop then UIDropDownMenu_SetText(f.loadClassDrop, "Any Class"); if UIDropDownMenu_DisableDropDown then UIDropDownMenu_DisableDropDown(f.loadClassDrop) end end
-            if f.loadSpecDrop then UIDropDownMenu_SetText(f.loadSpecDrop, "Any Spec"); if UIDropDownMenu_DisableDropDown then UIDropDownMenu_DisableDropDown(f.loadSpecDrop) end end
-            return
-        end
-        local s = GetAuraSettings(key) or {}
-        local never, combat, enc, char, class, spec = GetEffectiveModes(s)
-        if f.loadNeverCheck then f.loadNeverCheck:SetChecked(never and true or false) end
-        if f.loadCombatButton then UpdateCombatButtonText(f.loadCombatButton, combat, never); if never then f.loadCombatButton:Disable() else f.loadCombatButton:Enable() end end
-        if f.loadEncounterButton then UpdateEncounterButtonText(f.loadEncounterButton, enc, never); if never then f.loadEncounterButton:Disable() else f.loadEncounterButton:Enable() end end
-        if f.loadCharEdit then f.loadCharEdit:SetText(char or ""); if never then f.loadCharEdit:Disable() else f.loadCharEdit:Enable() end end
-        if f.loadCharMeBtn then if never then f.loadCharMeBtn:Disable() else f.loadCharMeBtn:Enable() end end
-        -- Class
-        if f.loadClassDrop then
-            UIDropDownMenu_SetText(f.loadClassDrop, GetClassDropdownText(class))
-            if never then
-                if UIDropDownMenu_DisableDropDown then UIDropDownMenu_DisableDropDown(f.loadClassDrop) end
-            else
-                if UIDropDownMenu_EnableDropDown then UIDropDownMenu_EnableDropDown(f.loadClassDrop) end
-            end
-        end
-        -- Spec
-        if f.loadSpecDrop then
-            UIDropDownMenu_SetText(f.loadSpecDrop, GetSpecDropdownText(class or MSWA_GetPlayerClassToken(), spec))
-            if never then
-                if UIDropDownMenu_DisableDropDown then UIDropDownMenu_DisableDropDown(f.loadSpecDrop) end
-            else
-                if UIDropDownMenu_EnableDropDown then UIDropDownMenu_EnableDropDown(f.loadSpecDrop) end
-            end
-        end
-    end
-
-    f.loadNeverRow:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID
-        if not key then return end
-        local s = GetAuraSettings(key) or {}
-        local never, combat, enc, char, class, spec = GetEffectiveModes(s)
-        ApplyModesToSettings(key, not never, combat, enc, char, class, spec)
-        SyncLoadControls()
-    end)
-    f.loadNeverCheck:SetScript("OnClick", function() end)
-
-    f.loadCombatButton:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s = GetAuraSettings(key) or {}
-        local never, combat, enc, char, class, spec = GetEffectiveModes(s)
-        if never then return end
-        local next = combat == nil and "IN" or (combat == "IN" and "OUT" or nil)
-        ApplyModesToSettings(key, never, next, enc, char, class, spec); SyncLoadControls()
-    end)
-    f.loadEncounterButton:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s = GetAuraSettings(key) or {}
-        local never, combat, enc, char, class, spec = GetEffectiveModes(s)
-        if never then return end
-        local next = enc == nil and "IN" or (enc == "IN" and "OUT" or nil)
-        ApplyModesToSettings(key, never, combat, next, char, class, spec); SyncLoadControls()
-    end)
-    f.loadCharEdit:SetScript("OnEnterPressed", function(self)
-        self:ClearFocus()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s = GetAuraSettings(key) or {}
-        local never, combat, enc, _, class, spec = GetEffectiveModes(s)
-        if never then return end
-        local v = tostring(self:GetText() or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if v == "" then v = nil elseif not v:find("%-") then
-            local realm = MSWA_GetPlayerRealm and MSWA_GetPlayerRealm() or ""
-            if realm and realm ~= "" then v = v .. "-" .. realm end
-        end
-        ApplyModesToSettings(key, never, combat, enc, v, class, spec); SyncLoadControls()
-    end)
-    f.loadCharEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus(); SyncLoadControls() end)
-
-    -- "Me" button: fill in current character Name-Realm
-    f.loadCharMeBtn:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s = GetAuraSettings(key) or {}
-        local never, combat, enc, _, class, spec = GetEffectiveModes(s)
-        if never then return end
-        local name = MSWA_GetPlayerName() or ""
-        local realm = MSWA_GetPlayerRealm() or ""
-        local full = realm ~= "" and (name .. "-" .. realm) or name
-        ApplyModesToSettings(key, never, combat, enc, full, class, spec); SyncLoadControls()
-    end)
-    f.altPanel.Sync = function() SyncLoadControls() end
-
-    f.altText = altContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.altText:SetPoint("TOPLEFT", 10, -10); f.altText:SetWidth(440); f.altText:SetJustifyH("LEFT"); f.altText:SetWordWrap(true); f.altText:SetText("")
-
-    -- Set scroll child height for Load Info
-    altContent:SetHeight(340)
-
-    -- Group Panel
-    f.groupPanel = CreateFrame("Frame", nil, rightPanel)
-    f.groupPanel:SetPoint("TOPLEFT", 12, -60); f.groupPanel:SetPoint("BOTTOMRIGHT", -12, 12); f.groupPanel:Hide()
-
-    local gpTitle = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    gpTitle:SetPoint("TOPLEFT", 0, 0); gpTitle:SetText("Group settings")
-    local gpNameLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    gpNameLabel:SetPoint("TOPLEFT", gpTitle, "BOTTOMLEFT", 0, -12); gpNameLabel:SetText("Name")
-    f.groupNameEdit = CreateFrame("EditBox", nil, f.groupPanel, "InputBoxTemplate")
-    f.groupNameEdit:SetAutoFocus(false); f.groupNameEdit:SetSize(220, 22); f.groupNameEdit:SetPoint("LEFT", gpNameLabel, "RIGHT", 10, 0)
-    f.groupNameEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); local db = MSWA_GetDB(); local gid = MSWA.selectedGroupID; local g = gid and db.groups and db.groups[gid]; if g then g.name = self:GetText() or g.name; MSWA_RefreshOptionsList() end end)
-
-    local gpXLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal"); gpXLabel:SetPoint("TOPLEFT", gpNameLabel, "BOTTOMLEFT", 0, -18); gpXLabel:SetText("Group X")
-    f.groupXEdit = CreateFrame("EditBox", nil, f.groupPanel, "InputBoxTemplate"); f.groupXEdit:SetAutoFocus(false); f.groupXEdit:SetSize(80, 22); f.groupXEdit:SetPoint("LEFT", gpXLabel, "RIGHT", 10, 0)
-    local gpYLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal"); gpYLabel:SetPoint("LEFT", f.groupXEdit, "RIGHT", 24, 0); gpYLabel:SetText("Group Y")
-    f.groupYEdit = CreateFrame("EditBox", nil, f.groupPanel, "InputBoxTemplate"); f.groupYEdit:SetAutoFocus(false); f.groupYEdit:SetSize(80, 22); f.groupYEdit:SetPoint("LEFT", gpYLabel, "RIGHT", 10, 0)
-    local gpSizeLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal"); gpSizeLabel:SetPoint("TOPLEFT", gpXLabel, "BOTTOMLEFT", 0, -18); gpSizeLabel:SetText("Icon size")
-    f.groupSizeEdit = CreateFrame("EditBox", nil, f.groupPanel, "InputBoxTemplate"); f.groupSizeEdit:SetAutoFocus(false); f.groupSizeEdit:SetSize(80, 22); f.groupSizeEdit:SetPoint("LEFT", gpSizeLabel, "RIGHT", 10, 0)
-
-    local gpAnchorLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal"); gpAnchorLabel:SetPoint("TOPLEFT", gpSizeLabel, "BOTTOMLEFT", 0, -18); gpAnchorLabel:SetText("Anchor Frame")
-    f.groupAnchorEdit = CreateFrame("EditBox", nil, f.groupPanel, "InputBoxTemplate"); f.groupAnchorEdit:SetAutoFocus(false); f.groupAnchorEdit:SetSize(220, 22); f.groupAnchorEdit:SetPoint("LEFT", gpAnchorLabel, "RIGHT", 10, 0)
-    f.groupAnchorEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyGroupSettings() end)
-    f.groupAnchorEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    -- Anchor From / Anchor To dropdowns (Gamz: anchor from top right to bottom right at 0/0)
-    local ANCHOR_POINTS = { "CENTER", "TOPLEFT", "TOP", "TOPRIGHT", "RIGHT", "BOTTOMRIGHT", "BOTTOM", "BOTTOMLEFT", "LEFT" }
-    local gpAnchorFromLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal"); gpAnchorFromLabel:SetPoint("TOPLEFT", gpAnchorLabel, "BOTTOMLEFT", 0, -18); gpAnchorFromLabel:SetText("Anchor From")
-    f.groupPointDrop = CreateFrame("Frame", "MSWA_GroupPointDD", f.groupPanel, "UIDropDownMenuTemplate"); f.groupPointDrop:SetPoint("LEFT", gpAnchorFromLabel, "RIGHT", -6, -2); UIDropDownMenu_SetWidth(f.groupPointDrop, 110)
-    UIDropDownMenu_Initialize(f.groupPointDrop, function(self, level)
-        if not level then return end
-        for _, pt in ipairs(ANCHOR_POINTS) do
-            local info = UIDropDownMenu_CreateInfo(); info.text = pt; info.value = pt
-            info.func = function() UIDropDownMenu_SetSelectedValue(f.groupPointDrop, pt); UIDropDownMenu_SetText(f.groupPointDrop, pt); ApplyGroupSettings() end
-            info.checked = (UIDropDownMenu_GetSelectedValue(f.groupPointDrop) == pt); UIDropDownMenu_AddButton(info, level)
-        end
-    end)
-    UIDropDownMenu_SetSelectedValue(f.groupPointDrop, "CENTER"); UIDropDownMenu_SetText(f.groupPointDrop, "CENTER")
-
-    local gpAnchorToLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal"); gpAnchorToLabel:SetPoint("LEFT", f.groupPointDrop, "RIGHT", 4, 2); gpAnchorToLabel:SetText("To")
-    f.groupRelPointDrop = CreateFrame("Frame", "MSWA_GroupRelPointDD", f.groupPanel, "UIDropDownMenuTemplate"); f.groupRelPointDrop:SetPoint("LEFT", gpAnchorToLabel, "RIGHT", -6, -2); UIDropDownMenu_SetWidth(f.groupRelPointDrop, 110)
-    UIDropDownMenu_Initialize(f.groupRelPointDrop, function(self, level)
-        if not level then return end
-        for _, pt in ipairs(ANCHOR_POINTS) do
-            local info = UIDropDownMenu_CreateInfo(); info.text = pt; info.value = pt
-            info.func = function() UIDropDownMenu_SetSelectedValue(f.groupRelPointDrop, pt); UIDropDownMenu_SetText(f.groupRelPointDrop, pt); ApplyGroupSettings() end
-            info.checked = (UIDropDownMenu_GetSelectedValue(f.groupRelPointDrop) == pt); UIDropDownMenu_AddButton(info, level)
-        end
-    end)
-    UIDropDownMenu_SetSelectedValue(f.groupRelPointDrop, "CENTER"); UIDropDownMenu_SetText(f.groupRelPointDrop, "CENTER")
-
-    -- Growth Direction dropdown (Gamz: groups grow right by default, want left/up/down)
-    local gpGrowthLabel = f.groupPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal"); gpGrowthLabel:SetPoint("TOPLEFT", gpAnchorFromLabel, "BOTTOMLEFT", 0, -22); gpGrowthLabel:SetText("Growth Direction")
-    f.groupGrowthDrop = CreateFrame("Frame", "MSWA_GroupGrowthDD", f.groupPanel, "UIDropDownMenuTemplate"); f.groupGrowthDrop:SetPoint("LEFT", gpGrowthLabel, "RIGHT", -6, -2); UIDropDownMenu_SetWidth(f.groupGrowthDrop, 110)
-    local GROWTH_LABELS = { RIGHT = "Right", LEFT = "Left", UP = "Up", DOWN = "Down" }
-    local GROWTH_ORDER  = { "RIGHT", "LEFT", "UP", "DOWN" }
-    UIDropDownMenu_Initialize(f.groupGrowthDrop, function(self, level)
-        if not level then return end
-        for _, val in ipairs(GROWTH_ORDER) do
-            local info = UIDropDownMenu_CreateInfo(); info.text = GROWTH_LABELS[val]; info.value = val
-            info.func = function() UIDropDownMenu_SetSelectedValue(f.groupGrowthDrop, val); UIDropDownMenu_SetText(f.groupGrowthDrop, GROWTH_LABELS[val]); ApplyGroupSettings() end
-            info.checked = (UIDropDownMenu_GetSelectedValue(f.groupGrowthDrop) == val); UIDropDownMenu_AddButton(info, level)
-        end
-    end)
-    UIDropDownMenu_SetSelectedValue(f.groupGrowthDrop, "RIGHT"); UIDropDownMenu_SetText(f.groupGrowthDrop, "Right")
-
-    local function ApplyGroupSettings()
+    local gpApplyBtn = W.Button(f.groupPanel, "Apply", 80, 24, function()
         local db = MSWA_GetDB(); local gid = MSWA.selectedGroupID; local g = gid and db.groups and db.groups[gid]; if not g then return end
-        local x = tonumber(f.groupXEdit:GetText()) or g.x or 0
-        local y = tonumber(f.groupYEdit:GetText()) or g.y or 0
-        local size = tonumber(f.groupSizeEdit:GetText()) or g.size or MSWA.ICON_SIZE
-        local anchorFrame = f.groupAnchorEdit and f.groupAnchorEdit:GetText() or ""
-        anchorFrame = anchorFrame and anchorFrame:gsub("^%s+", ""):gsub("%s+$", "") or ""
-        if size < 8 then size = 8 end
-        g.x = x; g.y = y
-        g.anchorFrame = (anchorFrame ~= "" and anchorFrame) or nil
-        -- Anchor from/to
-        g.point = f.groupPointDrop and UIDropDownMenu_GetSelectedValue(f.groupPointDrop) or g.point or "CENTER"
-        g.relPoint = f.groupRelPointDrop and UIDropDownMenu_GetSelectedValue(f.groupRelPointDrop) or g.relPoint or "CENTER"
-        -- Growth direction
-        g.growthDirection = f.groupGrowthDrop and UIDropDownMenu_GetSelectedValue(f.groupGrowthDrop) or g.growthDirection or "RIGHT"
-        local oldSize = g.size or MSWA.ICON_SIZE; if oldSize < 1 then oldSize = MSWA.ICON_SIZE end
-        -- Scale per-icon width/height if group size changed
-        if size ~= oldSize and db.auraGroups and db.spellSettings then
-            local ratio = size / oldSize
-            for key, gg in pairs(db.auraGroups) do
-                if gg == gid then
-                    local s = db.spellSettings[key] or {}
-                    local w = s.width or oldSize; local h = s.height or w
-                    s.width = w * ratio; s.height = h * ratio
-                    db.spellSettings[key] = s
-                end
-            end
-        end
-        g.size = size
-        -- Re-layout members when growth direction changes
-        local dir = g.growthDirection or "RIGHT"
-        local step = size + MSWA.ICON_SPACE
-        if db.auraGroups and db.spellSettings then
-            local members = MSWA_EnsureGroupMembers and MSWA_EnsureGroupMembers(gid) or nil
-            if type(members) == "table" then
-                for i = 1, #members do
-                    local mkey = members[i]
-                    if db.auraGroups[mkey] == gid then
-                        local ms = db.spellSettings[mkey] or {}
-                        local idx = i - 1
-                        if dir == "LEFT" then
-                            ms.x = -(idx * step); ms.y = 0
-                        elseif dir == "UP" then
-                            ms.x = 0; ms.y = idx * step
-                        elseif dir == "DOWN" then
-                            ms.x = 0; ms.y = -(idx * step)
-                        else -- RIGHT
-                            ms.x = idx * step; ms.y = 0
-                        end
-                        db.spellSettings[mkey] = ms
-                    end
-                end
-            end
-        end
+        g.x = tonumber(f.groupXEdit:GetText()) or 0; g.y = tonumber(f.groupYEdit:GetText()) or 0
+        g.size = tonumber(f.groupSizeEdit:GetText()) or MSWA.ICON_SIZE
+        local af = f.groupAnchorEdit:GetText():gsub("^%s+",""):gsub("%s+$","")
+        g.anchorFrame = (af ~= "" and af) or nil
         if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
-    end
-
-    local function HookAutoApply(editBox)
-        if not editBox then return end
-        editBox:SetScript("OnEnterPressed", function(self)
-            self._mswaSkipApply = nil
-            self:ClearFocus() -- triggers OnEditFocusLost
-        end)
-        editBox:SetScript("OnEscapePressed", function(self)
-            self._mswaSkipApply = true
-            self:ClearFocus() -- OnEditFocusLost will resync instead of applying
-        end)
-        editBox:SetScript("OnEditFocusLost", function(self)
-            if self._mswaSkipApply then
-                self._mswaSkipApply = nil
-                if f.groupPanel and f.groupPanel.Sync then f.groupPanel:Sync() end
-                return
-            end
-            ApplyGroupSettings()
-        end)
-    end
-    HookAutoApply(f.groupXEdit); HookAutoApply(f.groupYEdit); HookAutoApply(f.groupSizeEdit)
-    if f.groupAnchorEdit then HookAutoApply(f.groupAnchorEdit) end
+    end)
+    gpApplyBtn:SetPoint("TOPLEFT", gpGrowthDd, "BOTTOMLEFT", 0, -14)
 
     function f.groupPanel:Sync()
         local db = MSWA_GetDB(); local gid = MSWA.selectedGroupID; local g = gid and db.groups and db.groups[gid]; if not g then return end
         f.groupNameEdit:SetText(g.name or ""); f.groupXEdit:SetText(tostring(g.x or 0))
         f.groupYEdit:SetText(tostring(g.y or 0)); f.groupSizeEdit:SetText(tostring(g.size or MSWA.ICON_SIZE))
-        if f.groupAnchorEdit then f.groupAnchorEdit:SetText(g.anchorFrame or "") end
-        -- Anchor from/to
-        local pt = g.point or "CENTER"
-        if f.groupPointDrop then UIDropDownMenu_SetSelectedValue(f.groupPointDrop, pt); UIDropDownMenu_SetText(f.groupPointDrop, pt) end
-        local rp = g.relPoint or pt
-        if f.groupRelPointDrop then UIDropDownMenu_SetSelectedValue(f.groupRelPointDrop, rp); UIDropDownMenu_SetText(f.groupRelPointDrop, rp) end
-        -- Growth direction
-        local dir = g.growthDirection or "RIGHT"
-        local GL = { RIGHT = "Right", LEFT = "Left", UP = "Up", DOWN = "Down" }
-        if f.groupGrowthDrop then UIDropDownMenu_SetSelectedValue(f.groupGrowthDrop, dir); UIDropDownMenu_SetText(f.groupGrowthDrop, GL[dir] or "Right") end
+        f.groupAnchorEdit:SetText(g.anchorFrame or "")
+        gpGrowthDd:Refresh()
     end
 
-    -- =========================================================
-    -- Glow tab panel  (LibCustomGlow integration)
-    -- =========================================================
-    f.glowPanel2 = CreateFrame("Frame", nil, rightPanel)
-    f.glowPanel2:SetPoint("TOPLEFT", 12, -60); f.glowPanel2:SetPoint("BOTTOMRIGHT", -12, 12); f.glowPanel2:Hide()
+    -- ════════════════════════════════════════════════════
+    -- BOTTOM BAR
+    -- ════════════════════════════════════════════════════
+    local bottomBar = CreateFrame("Frame", nil, f, "BackdropTemplate")
+    bottomBar:SetPoint("BOTTOMLEFT", 8, 8); bottomBar:SetPoint("BOTTOMRIGHT", -8, 8); bottomBar:SetHeight(28)
+    W.ApplyBackdrop(bottomBar, 0.30)
 
-    -- Scroll frame inside glowPanel2 (prevents clipping on small windows)
-    local glowScroll = CreateFrame("ScrollFrame", "MSWA_GlowScrollFrame", f.glowPanel2, "UIPanelScrollFrameTemplate")
-    glowScroll:SetPoint("TOPLEFT", 0, 0)
-    glowScroll:SetPoint("BOTTOMRIGHT", -26, 0)
-    f._glowScroll = glowScroll
-
-    local glowContent = CreateFrame("Frame")
-    glowContent:SetWidth(400)
-    glowScroll:SetScrollChild(glowContent)
-    f._glowContent = glowContent
-
-    glowScroll:SetScript("OnSizeChanged", function(self, w)
-        if w and w > 30 then glowContent:SetWidth(w) end
-    end)
-
-    local glowAvailable = MSWA_IsGlowAvailable and MSWA_IsGlowAvailable() or false
-
-    local glowTitle = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    glowTitle:SetPoint("TOPLEFT", 10, -6)
-    glowTitle:SetText(glowAvailable and "|cffffcc00Glow Settings|r" or "|cffff4040Glow (LibCustomGlow not found)|r")
-
-    -- Enable checkbox
-    f.glowEnableCheck = CreateFrame("CheckButton", nil, glowContent, "ChatConfigCheckButtonTemplate")
-    f.glowEnableCheck:SetPoint("TOPLEFT", glowTitle, "BOTTOMLEFT", -4, -10)
-    f.glowEnableLabel = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.glowEnableLabel:SetPoint("LEFT", f.glowEnableCheck, "RIGHT", 2, 0)
-    f.glowEnableLabel:SetText("Enable Glow")
-
-    -- Glow Type dropdown
-    local glowTypeLabel = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    glowTypeLabel:SetPoint("TOPLEFT", f.glowEnableCheck, "BOTTOMLEFT", 4, -12)
-    glowTypeLabel:SetText("|cffffcc00Type:|r")
-    f.glowTypeDrop = CreateFrame("Frame", "MSWA_GlowTypeDropDown", glowContent, "UIDropDownMenuTemplate")
-    f.glowTypeDrop:SetPoint("LEFT", glowTypeLabel, "RIGHT", -10, -3)
-    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.glowTypeDrop, 140) end
-
-    UIDropDownMenu_Initialize(f.glowTypeDrop, function(self, level)
-        level = level or 1
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = MSWA_GetAuraSettings and MSWA_GetAuraSettings(key) or nil
-        local gs = s2 and s2.glow or {}
-        local curType = gs.glowType or "PIXEL"
-
-        for _, typeKey in ipairs(MSWA.GLOW_TYPE_ORDER or {}) do
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = MSWA.GLOW_TYPES[typeKey] or typeKey
-            info.value = typeKey
-            info.checked = (curType == typeKey)
-            info.func = function()
-                local k = MSWA.selectedSpellID; if not k then return end
-                local ss = MSWA_EnsureAuraSettings(k)
-                local g = MSWA_GetOrCreateGlowSettings(ss)
-                g.glowType = typeKey
-                UIDropDownMenu_SetText(f.glowTypeDrop, MSWA.GLOW_TYPES[typeKey])
-                CloseDropDownMenus()
-                MSWA_RequestUpdateSpells()
-                if f.glowPanel2 and f.glowPanel2.Sync then f.glowPanel2:Sync() end
-            end
-            UIDropDownMenu_AddButton(info, level)
-        end
-    end)
-
-    -- Glow Color
-    local glowColorLabel = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    glowColorLabel:SetPoint("LEFT", f.glowTypeDrop, "RIGHT", 4, 3)
-    glowColorLabel:SetText("|cffffcc00Color:|r")
-    f.glowColorBtn = CreateFrame("Button", nil, glowContent)
-    f.glowColorBtn:SetSize(20, 20); f.glowColorBtn:SetPoint("LEFT", glowColorLabel, "RIGHT", 6, 0); f.glowColorBtn:EnableMouse(true)
-    f.glowColorSwatch = f.glowColorBtn:CreateTexture(nil, "ARTWORK"); f.glowColorSwatch:SetAllPoints(true); f.glowColorSwatch:SetColorTexture(0.95, 0.95, 0.32, 1)
-    local glowColorBorder = f.glowColorBtn:CreateTexture(nil, "BORDER"); glowColorBorder:SetPoint("TOPLEFT", -1, 1); glowColorBorder:SetPoint("BOTTOMRIGHT", 1, -1); glowColorBorder:SetColorTexture(0, 0, 0, 1)
-
-    f.glowColorBtn:SetScript("OnClick", function()
-        local keyAtOpen = MSWA.selectedSpellID; if not keyAtOpen then return end
-        local ss = MSWA_GetAuraSettings(keyAtOpen) or {}
-        local gs = ss.glow or {}
-        local gc = gs.color or { r = 0.95, g = 0.95, b = 0.32, a = 1 }
-        local r, g, b = tonumber(gc.r) or 0.95, tonumber(gc.g) or 0.95, tonumber(gc.b) or 0.32
-
-        local function ApplyGlowColor(nr, ng, nb)
-            local ss2 = MSWA_EnsureAuraSettings(keyAtOpen)
-            local g2 = MSWA_GetOrCreateGlowSettings(ss2)
-            g2.color = g2.color or {}
-            g2.color.r = nr; g2.color.g = ng; g2.color.b = nb; g2.color.a = 1
-            if f.glowColorSwatch then f.glowColorSwatch:SetColorTexture(nr, ng, nb, 1) end
-            MSWA_RequestUpdateSpells()
-        end
-
-        if ColorPickerFrame and ColorPickerFrame.SetupColorPickerAndShow then
-            local function OnChanged() local nr, ng, nb = ColorPickerFrame:GetColorRGB(); if type(nr) == "number" then ApplyGlowColor(nr, ng, nb) end end
-            ColorPickerFrame:SetupColorPickerAndShow({ r=r, g=g, b=b, hasOpacity=false, swatchFunc=OnChanged, func=OnChanged, okayFunc=OnChanged, cancelFunc=function(restore) if type(restore) == "table" then ApplyGlowColor(restore.r or r, restore.g or g, restore.b or b) else ApplyGlowColor(r, g, b) end end })
-        elseif ColorPickerFrame then
-            ColorPickerFrame.hasOpacity = false; ColorPickerFrame.previousValues = { r=r, g=g, b=b }
-            ColorPickerFrame.func = function() ApplyGlowColor(ColorPickerFrame:GetColorRGB()) end
-            ColorPickerFrame.cancelFunc = function(prev) if type(prev) == "table" then ApplyGlowColor(prev.r or r, prev.g or g, prev.b or b) else ApplyGlowColor(r, g, b) end end
-            ColorPickerFrame:SetColorRGB(r, g, b); ColorPickerFrame:Show()
-        end
-    end)
-
-    -- Condition dropdown
-    local glowCondLabel = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    glowCondLabel:SetPoint("TOPLEFT", glowTypeLabel, "BOTTOMLEFT", 0, -20)
-    glowCondLabel:SetText("|cffffcc00Condition:|r")
-    f.glowCondDrop = CreateFrame("Frame", "MSWA_GlowCondDropDown", glowContent, "UIDropDownMenuTemplate")
-    f.glowCondDrop:SetPoint("LEFT", glowCondLabel, "RIGHT", -10, -3)
-    if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(f.glowCondDrop, 140) end
-
-    UIDropDownMenu_Initialize(f.glowCondDrop, function(self, level)
-        level = level or 1
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = MSWA_GetAuraSettings and MSWA_GetAuraSettings(key) or nil
-        local gs = s2 and s2.glow or {}
-        local curCond = gs.condition or "ALWAYS"
-        local isAutoBuff = s2 and (s2.auraMode == "AUTOBUFF" or s2.auraMode == "BUFF_THEN_CD" or s2.auraMode == "REMINDER_BUFF" or s2.auraMode == "CHARGES")
-
-        for _, condKey in ipairs(MSWA.GLOW_COND_ORDER or {}) do
-            -- Timer conditions available for AUTOBUFF / BUFF_THEN_CD / REMINDER_BUFF (we compute remaining ourselves)
-            if isAutoBuff or (condKey ~= "TIMER_BELOW" and condKey ~= "TIMER_ABOVE") then
-                local info = UIDropDownMenu_CreateInfo()
-                info.text = MSWA.GLOW_CONDITIONS[condKey] or condKey
-                info.value = condKey
-                info.checked = (curCond == condKey)
-                info.func = function()
-                    local k = MSWA.selectedSpellID; if not k then return end
-                    local ss = MSWA_EnsureAuraSettings(k)
-                    local g2 = MSWA_GetOrCreateGlowSettings(ss)
-                    g2.condition = condKey
-                    UIDropDownMenu_SetText(f.glowCondDrop, MSWA.GLOW_CONDITIONS[condKey])
-                    CloseDropDownMenus()
-                    MSWA_RequestUpdateSpells()
-                    if f.glowPanel2 and f.glowPanel2.Sync then f.glowPanel2:Sync() end
-                end
-                UIDropDownMenu_AddButton(info, level)
-            end
-        end
-    end)
-
-    -- Condition Value
-    f.glowCondValueLabel = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.glowCondValueLabel:SetPoint("LEFT", f.glowCondDrop, "RIGHT", 4, 3)
-    f.glowCondValueLabel:SetText("Seconds:")
-    f.glowCondValueEdit = CreateFrame("EditBox", nil, glowContent, "InputBoxTemplate")
-    f.glowCondValueEdit:SetSize(50, 20); f.glowCondValueEdit:SetPoint("LEFT", f.glowCondValueLabel, "RIGHT", 6, 0)
-    f.glowCondValueEdit:SetAutoFocus(false)
-
-    local function ApplyGlowCondValue()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local ss = MSWA_EnsureAuraSettings(key)
-        local g2 = MSWA_GetOrCreateGlowSettings(ss)
-        local v = tonumber(f.glowCondValueEdit:GetText())
-        if v and v >= 0 then g2.conditionValue = v end
-        MSWA_RequestUpdateSpells()
-    end
-    f.glowCondValueEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyGlowCondValue() end)
-    f.glowCondValueEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    f.glowCondValueEdit:SetScript("OnEditFocusLost", function() ApplyGlowCondValue() end)
-
-    -- Separator
-    local glowSep = glowContent:CreateTexture(nil, "ARTWORK")
-    glowSep:SetPoint("TOPLEFT", glowCondLabel, "BOTTOMLEFT", 0, -24)
-    glowSep:SetSize(400, 1); glowSep:SetColorTexture(1, 1, 1, 0.15)
-
-    -- Per-type settings header
-    local glowDetailTitle = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    glowDetailTitle:SetPoint("TOPLEFT", glowSep, "BOTTOMLEFT", 0, -10)
-    glowDetailTitle:SetText("|cffffcc00Fine-Tuning:|r")
-
-    -- Lines / Particles
-    f.glowLinesLabel = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.glowLinesLabel:SetPoint("TOPLEFT", glowDetailTitle, "BOTTOMLEFT", 0, -10)
-    f.glowLinesLabel:SetText("Lines / Particles:")
-    f.glowLinesEdit = CreateFrame("EditBox", nil, glowContent, "InputBoxTemplate")
-    f.glowLinesEdit:SetSize(40, 20); f.glowLinesEdit:SetPoint("LEFT", f.glowLinesLabel, "RIGHT", 6, 0)
-    f.glowLinesEdit:SetAutoFocus(false); f.glowLinesEdit:SetNumeric(true)
-
-    -- Frequency
-    f.glowFreqLabel = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.glowFreqLabel:SetPoint("LEFT", f.glowLinesEdit, "RIGHT", 16, 0)
-    f.glowFreqLabel:SetText("Speed:")
-    f.glowFreqEdit = CreateFrame("EditBox", nil, glowContent, "InputBoxTemplate")
-    f.glowFreqEdit:SetSize(50, 20); f.glowFreqEdit:SetPoint("LEFT", f.glowFreqLabel, "RIGHT", 6, 0)
-    f.glowFreqEdit:SetAutoFocus(false)
-
-    -- Thickness / Scale
-    f.glowThickLabel = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.glowThickLabel:SetPoint("TOPLEFT", f.glowLinesLabel, "BOTTOMLEFT", 0, -10)
-    f.glowThickLabel:SetText("Thickness / Scale:")
-    f.glowThickEdit = CreateFrame("EditBox", nil, glowContent, "InputBoxTemplate")
-    f.glowThickEdit:SetSize(50, 20); f.glowThickEdit:SetPoint("LEFT", f.glowThickLabel, "RIGHT", 6, 0)
-    f.glowThickEdit:SetAutoFocus(false)
-
-    -- Duration (for Proc Glow)
-    f.glowDurLabel = glowContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.glowDurLabel:SetPoint("LEFT", f.glowThickEdit, "RIGHT", 16, 0)
-    f.glowDurLabel:SetText("Duration:")
-    f.glowDurEdit = CreateFrame("EditBox", nil, glowContent, "InputBoxTemplate")
-    f.glowDurEdit:SetSize(50, 20); f.glowDurEdit:SetPoint("LEFT", f.glowDurLabel, "RIGHT", 6, 0)
-    f.glowDurEdit:SetAutoFocus(false)
-
-    -- Apply hooks for fine-tuning fields
-    local function ApplyGlowDetails()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local ss = MSWA_EnsureAuraSettings(key)
-        local g2 = MSWA_GetOrCreateGlowSettings(ss)
-        local lines = tonumber(f.glowLinesEdit:GetText())
-        local freq  = tonumber(f.glowFreqEdit:GetText())
-        local thick = tonumber(f.glowThickEdit:GetText())
-        local dur   = tonumber(f.glowDurEdit:GetText())
-        if lines and lines >= 1 and lines <= 32 then g2.lines = lines end
-        if freq then g2.frequency = freq end
-        if thick and thick > 0 then
-            g2.thickness = thick
-            g2.scale = thick
-        end
-        if dur and dur > 0 then g2.duration = dur end
-        -- Force glow refresh by stopping all and re-evaluating
-        if MSWA_StopAllGlows then MSWA_StopAllGlows() end
-        MSWA_RequestUpdateSpells()
-    end
-    local function HookGlowBox(box)
-        box:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyGlowDetails() end)
-        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-        box:SetScript("OnEditFocusLost", function() ApplyGlowDetails() end)
-    end
-    HookGlowBox(f.glowLinesEdit); HookGlowBox(f.glowFreqEdit); HookGlowBox(f.glowThickEdit); HookGlowBox(f.glowDurEdit)
-
-    -- Enable checkbox handler
-    f.glowEnableCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local ss = MSWA_EnsureAuraSettings(key)
-        local g2 = MSWA_GetOrCreateGlowSettings(ss)
-        g2.enabled = self:GetChecked() and true or false
-        if not g2.enabled and MSWA_StopAllGlows then MSWA_StopAllGlows() end
-        MSWA_RequestUpdateSpells()
-        if f.glowPanel2 and f.glowPanel2.Sync then f.glowPanel2:Sync() end
-    end)
-
-    -- Hint text
-    local glowHint = glowContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    glowHint:SetPoint("TOPLEFT", f.glowThickLabel, "BOTTOMLEFT", 0, -16)
-    glowHint:SetWidth(420); glowHint:SetJustifyH("LEFT"); glowHint:SetWordWrap(true)
-    glowHint:SetText("|cff888888Pixel Glow: lines rotate around icon. AutoCast: sparkle particles. Button: Blizzard proc glow. Proc: animated overlay.|r")
-
-    -- Set scroll child height for Glow panel
-    glowContent:SetHeight(360)
-
-    -- Sync function
-    function f.glowPanel2:Sync()
-        local key = MSWA.selectedSpellID
-        if not key then return end
-        -- Stop active glows so changed settings (color, type, etc.) get re-applied
-        MSWA_StopAllGlows()
-        local s2 = MSWA_GetAuraSettings and MSWA_GetAuraSettings(key) or nil
-        local gs = (s2 and s2.glow) or {}
-        local defaults = MSWA.GLOW_DEFAULTS or {}
-        local enabled = gs.enabled and true or false
-        local glowType = gs.glowType or "PIXEL"
-        local cond = gs.condition or "ALWAYS"
-
-        f.glowEnableCheck:SetChecked(enabled)
-
-        -- Type dropdown text
-        UIDropDownMenu_SetText(f.glowTypeDrop, (MSWA.GLOW_TYPES or {})[glowType] or "Pixel Glow")
-
-        -- Condition dropdown text
-        local isAutoBuff2 = s2 and (s2.auraMode == "AUTOBUFF" or s2.auraMode == "BUFF_THEN_CD" or s2.auraMode == "REMINDER_BUFF" or s2.auraMode == "CHARGES")
-        -- Timer conditions work for AUTOBUFF / BUFF_THEN_CD / REMINDER_BUFF; reset for spell/item CDs
-        if not isAutoBuff2 and (cond == "TIMER_BELOW" or cond == "TIMER_ABOVE") then
-            cond = "ALWAYS"
-            if gs then gs.condition = "ALWAYS" end
-        end
-        UIDropDownMenu_SetText(f.glowCondDrop, (MSWA.GLOW_CONDITIONS or {})[cond] or "Always")
-
-        -- Condition value visibility (for AUTOBUFF / BUFF_THEN_CD / REMINDER_BUFF timer conditions)
-        local showValue = isAutoBuff2 and (cond == "TIMER_BELOW" or cond == "TIMER_ABOVE")
-        f.glowCondValueLabel:SetShown(showValue)
-        f.glowCondValueEdit:SetShown(showValue)
-        if showValue then
-            f.glowCondValueEdit:SetText(tostring(gs.conditionValue or defaults.conditionValue or 5))
-        end
-
-        -- Color swatch
-        local gc = gs.color or defaults.color or { r = 0.95, g = 0.95, b = 0.32, a = 1 }
-        f.glowColorSwatch:SetColorTexture(tonumber(gc.r) or 0.95, tonumber(gc.g) or 0.95, tonumber(gc.b) or 0.32, 1)
-
-        -- Per-type labels and values
-        if glowType == "PIXEL" then
-            f.glowLinesLabel:SetText("Lines:"); f.glowLinesLabel:Show(); f.glowLinesEdit:Show()
-            f.glowThickLabel:SetText("Thickness:"); f.glowThickLabel:Show(); f.glowThickEdit:Show()
-            f.glowDurLabel:Hide(); f.glowDurEdit:Hide()
-            f.glowLinesEdit:SetText(tostring(gs.lines or defaults.lines or 8))
-            f.glowFreqEdit:SetText(tostring(gs.frequency or defaults.frequency or 0.25))
-            f.glowThickEdit:SetText(tostring(gs.thickness or defaults.thickness or 2))
-        elseif glowType == "AUTOCAST" then
-            f.glowLinesLabel:SetText("Particles:"); f.glowLinesLabel:Show(); f.glowLinesEdit:Show()
-            f.glowThickLabel:SetText("Scale:"); f.glowThickLabel:Show(); f.glowThickEdit:Show()
-            f.glowDurLabel:Hide(); f.glowDurEdit:Hide()
-            f.glowLinesEdit:SetText(tostring(gs.lines or 4))
-            f.glowFreqEdit:SetText(tostring(gs.frequency or 0.125))
-            f.glowThickEdit:SetText(tostring(gs.scale or defaults.scale or 1))
-        elseif glowType == "BUTTON" then
-            f.glowLinesLabel:Hide(); f.glowLinesEdit:Hide()
-            f.glowThickLabel:Hide(); f.glowThickEdit:Hide()
-            f.glowDurLabel:Hide(); f.glowDurEdit:Hide()
-            f.glowFreqEdit:SetText(tostring(gs.frequency or 0.125))
-        elseif glowType == "PROC" then
-            f.glowLinesLabel:Hide(); f.glowLinesEdit:Hide()
-            f.glowThickLabel:Hide(); f.glowThickEdit:Hide()
-            f.glowDurLabel:Show(); f.glowDurEdit:Show()
-            f.glowFreqEdit:SetText(tostring(gs.frequency or 0.25))
-            f.glowDurEdit:SetText(tostring(gs.duration or defaults.duration or 1))
-        end
-
-        -- Disable controls if glow is not available
-        if not glowAvailable then
-            f.glowEnableCheck:Disable()
-            if UIDropDownMenu_DisableDropDown then
-                UIDropDownMenu_DisableDropDown(f.glowTypeDrop)
-                UIDropDownMenu_DisableDropDown(f.glowCondDrop)
-            end
-            f.glowCondValueEdit:Disable(); f.glowLinesEdit:Disable()
-            f.glowFreqEdit:Disable(); f.glowThickEdit:Disable(); f.glowDurEdit:Disable()
-            f.glowColorBtn:Disable()
-        else
-            f.glowEnableCheck:Enable()
-            if enabled then
-                if UIDropDownMenu_EnableDropDown then
-                    UIDropDownMenu_EnableDropDown(f.glowTypeDrop)
-                    UIDropDownMenu_EnableDropDown(f.glowCondDrop)
-                end
-                f.glowCondValueEdit:Enable(); f.glowLinesEdit:Enable()
-                f.glowFreqEdit:Enable(); f.glowThickEdit:Enable(); f.glowDurEdit:Enable()
-                f.glowColorBtn:Enable()
-            else
-                if UIDropDownMenu_DisableDropDown then
-                    UIDropDownMenu_DisableDropDown(f.glowTypeDrop)
-                    UIDropDownMenu_DisableDropDown(f.glowCondDrop)
-                end
-                f.glowCondValueEdit:Disable(); f.glowLinesEdit:Disable()
-                f.glowFreqEdit:Disable(); f.glowThickEdit:Disable(); f.glowDurEdit:Disable()
-                f.glowColorBtn:Disable()
-            end
-        end
-    end
-
-    -- General tab
-    f.generalPanel = CreateFrame("Frame", nil, rightPanel)
-    f.generalPanel:SetPoint("TOPLEFT", 12, -60); f.generalPanel:SetPoint("BOTTOMRIGHT", -12, 12); f.generalPanel:Hide()
-
-    -- Scroll frame inside generalPanel (prevents clipping on small windows)
-    local gpScroll = CreateFrame("ScrollFrame", "MSWA_GeneralScrollFrame", f.generalPanel, "UIPanelScrollFrameTemplate")
-    gpScroll:SetPoint("TOPLEFT", 0, 0)
-    gpScroll:SetPoint("BOTTOMRIGHT", -26, 0)
-    f._generalScroll = gpScroll
-
-    local gp = CreateFrame("Frame")
-    gp:SetWidth(400)
-    gpScroll:SetScrollChild(gp)
-    f._generalContent = gp
-
-    gpScroll:SetScript("OnSizeChanged", function(self, w)
-        if w and w > 30 then gp:SetWidth(w) end
-    end)
-
-    f.detailTitle = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.detailTitle:SetPoint("TOPLEFT", 10, -10); f.detailTitle:SetText("Selected aura:")
-    f.detailName = gp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); f.detailName:SetPoint("TOPLEFT", f.detailTitle, "BOTTOMLEFT", 0, -4); f.detailName:SetText("")
-
-    -- Change Spell/Item ID (rekey)
-    f.rekeyLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.rekeyLabel:SetPoint("TOPLEFT", f.detailName, "BOTTOMLEFT", 0, -10)
-    f.rekeyLabel:SetText("Spell/Item ID:")
-    f.rekeyEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate")
-    f.rekeyEdit:SetSize(80, 20)
-    f.rekeyEdit:SetPoint("LEFT", f.rekeyLabel, "RIGHT", 6, 0)
-    f.rekeyEdit:SetAutoFocus(false)
-    f.rekeyEdit:SetNumeric(true)
-    f.rekeyBtn = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate")
-    f.rekeyBtn:SetSize(60, 20)
-    f.rekeyBtn:SetPoint("LEFT", f.rekeyEdit, "RIGHT", 4, 0)
-    f.rekeyBtn:SetText("Change")
-    f.rekeyHint = gp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    f.rekeyHint:SetPoint("TOPLEFT", f.rekeyLabel, "BOTTOMLEFT", 0, -3)
-    f.rekeyHint:SetWidth(340); f.rekeyHint:SetJustifyH("LEFT")
-    f.rekeyHint:SetText("|cff888888Change spell/item ID. All settings are preserved.|r")
-
-    f.addLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormal"); f.addLabel:SetPoint("TOPLEFT", f.rekeyHint, "BOTTOMLEFT", 0, -10); f.addLabel:SetText("Add ID:")
-    f.addEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate"); f.addEdit:SetSize(80, 20); f.addEdit:SetPoint("LEFT", f.addLabel, "RIGHT", 6, 0); f.addEdit:SetAutoFocus(false); f.addEdit:SetNumeric(true)
-    f.idTypeLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.idTypeLabel:SetPoint("LEFT", f.addEdit, "RIGHT", 8, 0); f.idTypeLabel:SetText("Type:")
-    f.idTypeDrop = CreateFrame("Frame", "MSWA_IDTypeDropDown", gp, "UIDropDownMenuTemplate"); f.idTypeDrop:SetPoint("LEFT", f.idTypeLabel, "RIGHT", -10, -3); UIDropDownMenu_SetWidth(f.idTypeDrop, 140)
-    f.addButton = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate"); f.addButton:SetSize(60, 20); f.addButton:SetPoint("LEFT", f.idTypeDrop, "RIGHT", 0, 3); f.addButton:SetText("Add")
-    f.hint = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.hint:SetPoint("TOPLEFT", f.addLabel, "BOTTOMLEFT", 0, -10); f.hint:SetWidth(420); f.hint:SetJustifyH("LEFT"); f.hint:SetWordWrap(true)
-    f.hint:SetText("Enter an ID or drag a spell / item from Spellbook or Bags onto the drop zone below. Type: Item for trinkets, Auto Buff for spell buffs, Item Buff for trinket/item buffs.")
-
-    -- Drop zone for drag & drop from Spellbook / Inventory
-    f.dropZone = CreateFrame("Button", nil, gp)
-    f.dropZone:SetSize(320, 40)
-    f.dropZone:SetPoint("TOPLEFT", f.hint, "BOTTOMLEFT", 0, -6)
-
-    f.dropZone.bg = f.dropZone:CreateTexture(nil, "BACKGROUND")
-    f.dropZone.bg:SetAllPoints()
-    f.dropZone.bg:SetColorTexture(0.12, 0.12, 0.12, 0.7)
-
-    f.dropZone.border = CreateFrame("Frame", nil, f.dropZone, "BackdropTemplate")
-    f.dropZone.border:SetAllPoints()
-    f.dropZone.border:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 14, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
-    f.dropZone.border:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
-
-    f.dropZone.icon = f.dropZone:CreateTexture(nil, "ARTWORK")
-    f.dropZone.icon:SetSize(22, 22)
-    f.dropZone.icon:SetPoint("LEFT", 10, 0)
-    f.dropZone.icon:SetTexture("Interface\\CURSOR\\openhandglow")
-    f.dropZone.icon:SetDesaturated(true)
-    f.dropZone.icon:SetVertexColor(0.7, 0.7, 0.7)
-
-    f.dropZone.label = f.dropZone:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.dropZone.label:SetPoint("LEFT", f.dropZone.icon, "RIGHT", 8, 0)
-    f.dropZone.label:SetText("|cff888888Drop Spell or Item here|r")
-
-    f.autoBuffCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate"); f.autoBuffCheck:SetPoint("TOPLEFT", f.dropZone, "BOTTOMLEFT", -4, -8)
-    f.autoBuffLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.autoBuffLabel:SetPoint("LEFT", f.autoBuffCheck, "RIGHT", 2, 0)
-    f.autoBuffLabel:SetText("|cffffcc00Auto Buff mode|r  (show icon only while buff is active)")
-
-    -- Buff -> Cooldown checkbox
-    f.buffThenCDCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.buffThenCDCheck:SetPoint("TOPLEFT", f.autoBuffCheck, "BOTTOMLEFT", 0, -2)
-    f.buffThenCDLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.buffThenCDLabel:SetPoint("LEFT", f.buffThenCDCheck, "RIGHT", 2, 0)
-    f.buffThenCDLabel:SetText("|cff44ffaaBuff -> Cooldown|r  (buff timer first, then cooldown)")
-
-    f.buffDurLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.buffDurLabel:SetPoint("TOPLEFT", f.buffThenCDCheck, "BOTTOMLEFT", 22, -6); f.buffDurLabel:SetText("Buff duration (sec):")
-    f.buffDurEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate"); f.buffDurEdit:SetSize(60, 20); f.buffDurEdit:SetPoint("LEFT", f.buffDurLabel, "RIGHT", 6, 0); f.buffDurEdit:SetAutoFocus(false)
-
-    f.buffDelayLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.buffDelayLabel:SetPoint("TOPLEFT", f.buffDurLabel, "BOTTOMLEFT", 0, -8); f.buffDelayLabel:SetText("Timer restart after (sec):")
-    f.buffDelayEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate"); f.buffDelayEdit:SetSize(60, 20); f.buffDelayEdit:SetPoint("LEFT", f.buffDelayLabel, "RIGHT", 6, 0); f.buffDelayEdit:SetAutoFocus(false)
-
-    f.autoBuffCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local db2 = MSWA_GetDB(); local s2 = select(1, MSWA_GetOrCreateSpellSettings(db2, key))
-        if self:GetChecked() then
-            s2.auraMode = "AUTOBUFF"; if not s2.autoBuffDuration then s2.autoBuffDuration = 10 end
-            if f.buffThenCDCheck then f.buffThenCDCheck:SetChecked(false) end
-            if f.reminderBuffCheck then f.reminderBuffCheck:SetChecked(false) end
-            if f.chargesCheck then f.chargesCheck:SetChecked(false) end
-            if f.buffAuraCheck then f.buffAuraCheck:SetChecked(false) end; if MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
-        else
-            s2.auraMode = nil; MSWA._autoBuff[key] = nil
-        end
-        MSWA_UpdateDetailPanel(); MSWA_RequestUpdateSpells()
-    end)
-
-    f.buffThenCDCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local db2 = MSWA_GetDB(); local s2 = select(1, MSWA_GetOrCreateSpellSettings(db2, key))
-        if self:GetChecked() then
-            s2.auraMode = "BUFF_THEN_CD"; if not s2.autoBuffDuration then s2.autoBuffDuration = 10 end
-            if f.autoBuffCheck then f.autoBuffCheck:SetChecked(false) end
-            if f.reminderBuffCheck then f.reminderBuffCheck:SetChecked(false) end
-            if f.chargesCheck then f.chargesCheck:SetChecked(false) end
-            if f.buffAuraCheck then f.buffAuraCheck:SetChecked(false) end; if MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
-        else
-            s2.auraMode = nil; MSWA._autoBuff[key] = nil
-        end
-        MSWA_UpdateDetailPanel(); MSWA_RequestUpdateSpells()
-    end)
-
-    local function ApplyBuffDuration()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local db2 = MSWA_GetDB(); local s2 = select(1, MSWA_GetOrCreateSpellSettings(db2, key))
-        local v = tonumber(f.buffDurEdit:GetText()); if v and v >= 0.1 then s2.autoBuffDuration = math.floor(v * 1000 + 0.5) / 1000 end
-        MSWA._autoBuff[key] = nil; MSWA_RequestUpdateSpells()
-    end
-    f.buffDurEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyBuffDuration() end)
-    f.buffDurEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    local function ApplyBuffDelay()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local v = tonumber(f.buffDelayEdit:GetText())
-        if v and v >= 0 then v = math.floor(v * 1000 + 0.5) / 1000; s2.autoBuffDelay = (v > 0) and v or nil else s2.autoBuffDelay = nil end
-        MSWA._autoBuff[key] = nil; MSWA_RequestUpdateSpells()
-    end
-    f.buffDelayEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyBuffDelay() end)
-    f.buffDelayEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    f.buffDelayEdit:SetScript("OnEditFocusLost", function() ApplyBuffDelay() end)
-
-    -- Haste scaling toggle
-    f.hasteScaleCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.hasteScaleCheck:SetPoint("TOPLEFT", f.buffDelayLabel, "BOTTOMLEFT", -22, -6)
-    f.hasteScaleLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.hasteScaleLabel:SetPoint("LEFT", f.hasteScaleCheck, "RIGHT", 2, 0)
-    f.hasteScaleLabel:SetText("Haste scaling  (duration adjusts to spell haste)")
-    f.hasteScaleCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.hasteScaling = self:GetChecked() and true or nil
-        MSWA._autoBuff[key] = nil; MSWA_RequestUpdateSpells()
-    end)
-
-    -- Reminder Buff checkbox (third radio-style option)
-    f.reminderBuffCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.reminderBuffCheck:SetPoint("TOPLEFT", f.hasteScaleCheck, "BOTTOMLEFT", 0, -6)
-    f.reminderBuffLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.reminderBuffLabel:SetPoint("LEFT", f.reminderBuffCheck, "RIGHT", 2, 0)
-    f.reminderBuffLabel:SetText("|cffff6644Reminder Buff|r  (alert when buff is missing)")
-
-    f.reminderBuffCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local db2 = MSWA_GetDB(); local s2 = select(1, MSWA_GetOrCreateSpellSettings(db2, key))
-        if self:GetChecked() then
-            s2.auraMode = "REMINDER_BUFF"
-            if not s2.autoBuffDuration then s2.autoBuffDuration = 3600 end
-            if not s2.reminderText then s2.reminderText = "MISSING!" end
-            if not s2.reminderTextColor then s2.reminderTextColor = { r = 1, g = 0.2, b = 0.2 } end
-            if f.autoBuffCheck then f.autoBuffCheck:SetChecked(false) end
-            if f.buffThenCDCheck then f.buffThenCDCheck:SetChecked(false) end
-            if f.chargesCheck then f.chargesCheck:SetChecked(false) end
-            if f.buffAuraCheck then f.buffAuraCheck:SetChecked(false) end; if MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
-        else
-            s2.auraMode = nil; MSWA._autoBuff[key] = nil
-        end
-        MSWA_UpdateDetailPanel(); MSWA_RequestUpdateSpells()
-    end)
-
-    -- Reminder Buff sub-settings (shown only when REMINDER_BUFF mode active)
-    f.reminderPersistDeathCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.reminderPersistDeathCheck:SetPoint("TOPLEFT", f.reminderBuffCheck, "BOTTOMLEFT", 22, -2)
-    f.reminderPersistDeathLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.reminderPersistDeathLabel:SetPoint("LEFT", f.reminderPersistDeathCheck, "RIGHT", 2, 0)
-    f.reminderPersistDeathLabel:SetText("Persists through death  (poisons, flasks)")
-    f.reminderPersistDeathCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.reminderPersistDeath = self:GetChecked() and true or nil
-    end)
-
-    f.reminderShowTimerCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.reminderShowTimerCheck:SetPoint("TOPLEFT", f.reminderPersistDeathCheck, "BOTTOMLEFT", 0, -2)
-    f.reminderShowTimerLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.reminderShowTimerLabel:SetPoint("LEFT", f.reminderShowTimerCheck, "RIGHT", 2, 0)
-    f.reminderShowTimerLabel:SetText("Show timer while buff active")
-    f.reminderShowTimerCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.reminderShowTimer = self:GetChecked() and true or nil
+    f.btnPreview = W.Button(bottomBar, "Preview", 70, 22, function()
+        MSWA.previewMode = not MSWA.previewMode
+        if MSWA.previewMode then f.btnPreview:SetText("|cff00ff00Preview|r") else f.btnPreview:SetText("Preview") end
         MSWA_RequestUpdateSpells()
     end)
+    f.btnPreview:SetPoint("LEFT", 6, 0)
 
-    f.reminderTextLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.reminderTextLabel:SetPoint("TOPLEFT", f.reminderShowTimerCheck, "BOTTOMLEFT", 0, -8)
-    f.reminderTextLabel:SetText("Reminder text:")
-    f.reminderTextEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate")
-    f.reminderTextEdit:SetSize(120, 20); f.reminderTextEdit:SetPoint("LEFT", f.reminderTextLabel, "RIGHT", 6, 0); f.reminderTextEdit:SetAutoFocus(false)
-    local function ApplyReminderText()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local t = f.reminderTextEdit:GetText()
-        s2.reminderText = (t and t ~= "") and t or nil
-        MSWA_InvalidateIconCache()
-    end
-    f.reminderTextEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyReminderText() end)
-    f.reminderTextEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    f.reminderTextEdit:SetScript("OnEditFocusLost", ApplyReminderText)
-
-    f.reminderFontSizeLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.reminderFontSizeLabel:SetPoint("TOPLEFT", f.reminderTextLabel, "BOTTOMLEFT", 0, -8)
-    f.reminderFontSizeLabel:SetText("Font size:")
-    f.reminderFontSizeEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate")
-    f.reminderFontSizeEdit:SetSize(40, 20); f.reminderFontSizeEdit:SetPoint("LEFT", f.reminderFontSizeLabel, "RIGHT", 6, 0); f.reminderFontSizeEdit:SetAutoFocus(false); f.reminderFontSizeEdit:SetNumeric(true)
-    local function ApplyReminderFontSize()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local v = tonumber(f.reminderFontSizeEdit:GetText())
-        s2.reminderFontSize = (v and v >= 6 and v <= 72) and v or nil
-        MSWA_InvalidateIconCache()
-    end
-    f.reminderFontSizeEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyReminderFontSize() end)
-    f.reminderFontSizeEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    f.reminderFontSizeEdit:SetScript("OnEditFocusLost", ApplyReminderFontSize)
-
-    -- Color presets
-    f.reminderColorLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.reminderColorLabel:SetPoint("TOPLEFT", f.reminderFontSizeLabel, "BOTTOMLEFT", 0, -8)
-    f.reminderColorLabel:SetText("Text color:")
-
-    local colorPresets = { { "Red", 1, 0.2, 0.2 }, { "Yellow", 1, 1, 0.2 }, { "Green", 0.2, 1, 0.2 }, { "White", 1, 1, 1 } }
-    local prevColorBtn
-    for ci, cp in ipairs(colorPresets) do
-        local btn = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate")
-        btn:SetSize(52, 18); btn:SetText(cp[1])
-        if ci == 1 then
-            btn:SetPoint("LEFT", f.reminderColorLabel, "RIGHT", 6, 0)
-        else
-            btn:SetPoint("LEFT", prevColorBtn, "RIGHT", 2, 0)
-        end
-        btn:SetScript("OnClick", function()
-            local key = MSWA.selectedSpellID; if not key then return end
-            local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-            s2.reminderTextColor = { r = cp[2], g = cp[3], b = cp[4] }
-            MSWA_InvalidateIconCache()
-        end)
-        prevColorBtn = btn
-        f["reminderColor" .. ci] = btn
-    end
-
-    -- Charges checkbox (fourth radio-style option)
-    f.chargesCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.chargesCheck:SetPoint("TOPLEFT", f.reminderColorLabel, "BOTTOMLEFT", -22, -10)
-    f.chargesLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.chargesLabel:SetPoint("LEFT", f.chargesCheck, "RIGHT", 2, 0)
-    f.chargesLabel:SetText("|cff44ddffCharges|r  (user-defined charges, countdown per charge, gray at 0)")
-
-    f.chargesCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local db2 = MSWA_GetDB(); local s2 = select(1, MSWA_GetOrCreateSpellSettings(db2, key))
-        if self:GetChecked() then
-            s2.auraMode = "CHARGES"
-            if not s2.chargeMax then s2.chargeMax = 3 end
-            if not s2.chargeDuration then s2.chargeDuration = 0 end
-            -- Init runtime state
-            MSWA._charges = MSWA._charges or {}
-            MSWA._charges[key] = { remaining = s2.chargeMax, rechargeStart = 0 }
-            if f.autoBuffCheck then f.autoBuffCheck:SetChecked(false) end
-            if f.buffThenCDCheck then f.buffThenCDCheck:SetChecked(false) end
-            if f.reminderBuffCheck then f.reminderBuffCheck:SetChecked(false) end
-            if f.buffAuraCheck then f.buffAuraCheck:SetChecked(false) end; if MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
-        else
-            s2.auraMode = nil
-            if MSWA._charges then MSWA._charges[key] = nil end
-        end
-        MSWA_UpdateDetailPanel(); MSWA_RequestUpdateSpells()
-    end)
-
-    -- Buff Aura checkbox (fifth radio-style option)
-    f.buffAuraCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.buffAuraCheck:SetPoint("TOPLEFT", f.chargesCheck, "BOTTOMLEFT", 0, -6)
-    f.buffAuraLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.buffAuraLabel:SetPoint("LEFT", f.buffAuraCheck, "RIGHT", 2, 0)
-    f.buffAuraLabel:SetText("|cff55bbffBuff Aura|r  (track live buff via UNIT_AURA, secret-safe)")
-
-    f.buffAuraCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local db2 = MSWA_GetDB(); local s2 = select(1, MSWA_GetOrCreateSpellSettings(db2, key))
-        if self:GetChecked() then
-            s2.auraMode = "BUFF_AURA"; s2.auraUnit = s2.auraUnit or "player"
-            if s2.showWhenAbsent == nil then s2.showWhenAbsent = false end
-            if s2.desaturateOnAbsent == nil then s2.desaturateOnAbsent = true end
-            if s2.alphaOnAbsent == nil then s2.alphaOnAbsent = 0.45 end
-            if s2.showStacks == nil then s2.showStacks = true end
-            -- Register buff watch
-            local sid = MSWA_KeyToSpellID(key) or MSWA_KeyToItemID(key)
-            if sid then s2.auraSpellID = sid; if MSWA_RegisterBuffWatch then MSWA_RegisterBuffWatch(tostring(key), sid, s2.auraUnit or "player") end end
-            -- Uncheck other modes
-            if f.autoBuffCheck then f.autoBuffCheck:SetChecked(false) end
-            if f.buffThenCDCheck then f.buffThenCDCheck:SetChecked(false) end
-            if f.reminderBuffCheck then f.reminderBuffCheck:SetChecked(false) end
-            if f.chargesCheck then f.chargesCheck:SetChecked(false) end
-        else
-            s2.auraMode = nil
-            if MSWA_UnregisterBuffWatch then MSWA_UnregisterBuffWatch(tostring(key)) end
-        end
-        MSWA_UpdateDetailPanel(); MSWA_RequestUpdateSpells()
-    end)
-
-    -- Buff Aura sub-options
-    f.buffAuraAbsentCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.buffAuraAbsentCheck:SetPoint("TOPLEFT", f.buffAuraCheck, "BOTTOMLEFT", 20, -2)
-    f.buffAuraAbsentLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.buffAuraAbsentLabel:SetPoint("LEFT", f.buffAuraAbsentCheck, "RIGHT", 2, 0)
-    f.buffAuraAbsentLabel:SetText("Show when absent (dimmed)")
-    f.buffAuraAbsentCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.showWhenAbsent = self:GetChecked() and true or false
-        MSWA_RequestUpdateSpells()
-    end)
-
-    f.buffAuraDesatCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.buffAuraDesatCheck:SetPoint("TOPLEFT", f.buffAuraAbsentCheck, "BOTTOMLEFT", 0, -2)
-    f.buffAuraDesatLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.buffAuraDesatLabel:SetPoint("LEFT", f.buffAuraDesatCheck, "RIGHT", 2, 0)
-    f.buffAuraDesatLabel:SetText("Desaturate icon when absent")
-    f.buffAuraDesatCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.desaturateOnAbsent = self:GetChecked() and true or false
-        MSWA_RequestUpdateSpells()
-    end)
-
-    f.buffAuraStacksCheck = CreateFrame("CheckButton", nil, gp, "ChatConfigCheckButtonTemplate")
-    f.buffAuraStacksCheck:SetPoint("TOPLEFT", f.buffAuraDesatCheck, "BOTTOMLEFT", 0, -2)
-    f.buffAuraStacksLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.buffAuraStacksLabel:SetPoint("LEFT", f.buffAuraStacksCheck, "RIGHT", 2, 0)
-    f.buffAuraStacksLabel:SetText("Show stack count")
-    f.buffAuraStacksCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.showStacks = self:GetChecked() and true or false
-        MSWA_RequestUpdateSpells()
-    end)
-
-    f.buffAuraAlphaLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.buffAuraAlphaLabel:SetPoint("TOPLEFT", f.buffAuraStacksCheck, "BOTTOMLEFT", 22, -4)
-    f.buffAuraAlphaLabel:SetText("Absent alpha:")
-    f.buffAuraAlphaEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate")
-    f.buffAuraAlphaEdit:SetSize(50, 18); f.buffAuraAlphaEdit:SetPoint("LEFT", f.buffAuraAlphaLabel, "RIGHT", 6, 0); f.buffAuraAlphaEdit:SetAutoFocus(false)
-    f.buffAuraAlphaEdit:SetScript("OnEnterPressed", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local v = tonumber(self:GetText()) or 0.45
-        if v < 0 then v = 0 elseif v > 1 then v = 1 end
-        s2.alphaOnAbsent = v; self:SetText(tostring(v)); self:ClearFocus()
-        MSWA_RequestUpdateSpells()
-    end)
-    f.buffAuraAlphaEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    f.buffAuraSpellIDLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    f.buffAuraSpellIDLabel:SetPoint("TOPLEFT", f.buffAuraAlphaLabel, "BOTTOMLEFT", 0, -4)
-
-    -- Reminder threshold: "Only show when <= X min remaining"
-    f.reminderThreshLabel = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.reminderThreshLabel:SetPoint("TOPLEFT", f.buffAuraSpellIDLabel, "BOTTOMLEFT", 0, -8)
-    f.reminderThreshLabel:SetText("Only show when \226\137\164")
-
-    f.reminderThreshEdit = CreateFrame("EditBox", nil, gp, "InputBoxTemplate")
-    f.reminderThreshEdit:SetSize(40, 20)
-    f.reminderThreshEdit:SetPoint("LEFT", f.reminderThreshLabel, "RIGHT", 4, 0)
-    f.reminderThreshEdit:SetAutoFocus(false)
-
-    f.reminderThreshUnit = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.reminderThreshUnit:SetPoint("LEFT", f.reminderThreshEdit, "RIGHT", 4, 0)
-    f.reminderThreshUnit:SetText("min remaining")
-
-    f.reminderThreshHint = gp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    f.reminderThreshHint:SetPoint("TOPLEFT", f.reminderThreshLabel, "BOTTOMLEFT", 0, -3)
-    f.reminderThreshHint:SetWidth(340); f.reminderThreshHint:SetJustifyH("LEFT"); f.reminderThreshHint:SetWordWrap(true)
-    f.reminderThreshHint:SetText("|cff888888Leave empty to always show. Set 10 = show when buff has \226\137\164 10 min left.\nIdeal for Poisons, Raid Buffs, Flasks, Food Buffs.|r")
-
-    local function SaveThreshold()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local val = tonumber(f.reminderThreshEdit:GetText())
-        if val and val > 0 then
-            s2.reminderThresholdMin = val
-        else
-            s2.reminderThresholdMin = nil
-        end
-        MSWA_RequestUpdateSpells()
-    end
-    f.reminderThreshEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveThreshold() end)
-    f.reminderThreshEdit:SetScript("OnEditFocusLost", SaveThreshold)
-    f.reminderThreshEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    -- Anchor (after buffAuraCheck when visible, otherwise after chargesCheck)
-    local labelA = gp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); labelA:SetPoint("TOPLEFT", f.buffAuraCheck, "BOTTOMLEFT", 0, -10); labelA:SetText("Anchor to frame:")
-    f._anchorLabel = labelA
-    f.detailA = CreateFrame("EditBox", nil, gp, "InputBoxTemplate"); f.detailA:SetSize(260, 20); f.detailA:SetPoint("LEFT", labelA, "RIGHT", 6, 0); f.detailA:SetAutoFocus(false)
-    f.detailACD = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate"); f.detailACD:SetSize(110, 22); f.detailACD:SetPoint("TOPLEFT", labelA, "BOTTOMLEFT", 0, -10); f.detailACD:SetText("CD Manager")
-    f.detailAMSUF = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate"); f.detailAMSUF:SetSize(110, 22); f.detailAMSUF:SetPoint("LEFT", f.detailACD, "RIGHT", 6, 0); f.detailAMSUF:SetText("MSUF Player")
-    f.detailApply = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate"); f.detailApply:SetSize(80, 22); f.detailApply:SetPoint("TOPLEFT", f.detailACD, "BOTTOMLEFT", 0, -8); f.detailApply:SetText("Reset Pos")
-    f.detailDefault = CreateFrame("Button", nil, gp, "UIPanelButtonTemplate"); f.detailDefault:SetSize(80, 22); f.detailDefault:SetPoint("LEFT", f.detailApply, "RIGHT", 6, 0); f.detailDefault:SetText("Default")
-
-    -- Set scroll child height for General panel (increased for BUFF_AURA controls)
-    gp:SetHeight(900)
-
-    -- Display tab
-    f.displayPanel = CreateFrame("Frame", nil, rightPanel); f.displayPanel:SetPoint("TOPLEFT", 12, -60); f.displayPanel:SetPoint("BOTTOMRIGHT", -12, 12); f.displayPanel:Hide()
-
-    -- Scroll frame inside displayPanel (prevents clipping on small windows)
-    local dpScroll = CreateFrame("ScrollFrame", "MSWA_DisplayScrollFrame", f.displayPanel, "UIPanelScrollFrameTemplate")
-    dpScroll:SetPoint("TOPLEFT", 0, 0)
-    dpScroll:SetPoint("BOTTOMRIGHT", -26, 0)
-    f._displayScroll = dpScroll
-
-    local dp = CreateFrame("Frame")
-    dp:SetWidth(400)
-    dpScroll:SetScrollChild(dp)
-    f._displayContent = dp
-
-    dpScroll:SetScript("OnSizeChanged", function(self, w)
-        if w and w > 30 then dp:SetWidth(w) end
-    end)
-
-    -- ======= Display Type (Icon / Bar) =======
-    local dtTitle = dp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    dtTitle:SetPoint("TOPLEFT", 10, -10)
-    dtTitle:SetText("|cffffcc00Display Type|r")
-
-    f.displayTypeDrop = CreateFrame("Frame", "MSWA_DisplayTypeDD", dp, "UIDropDownMenuTemplate")
-    f.displayTypeDrop:SetPoint("TOPLEFT", dtTitle, "BOTTOMLEFT", -16, -2)
-    UIDropDownMenu_SetWidth(f.displayTypeDrop, 130)
-    f._displayTypeVal = "ICON"
-
-    UIDropDownMenu_Initialize(f.displayTypeDrop, function(self, level)
-        if not level then return end
-        local function AddDT(text, val, tip)
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = text; info.value = val
-            info.func = function()
-                f._displayTypeVal = val
-                UIDropDownMenu_SetSelectedValue(f.displayTypeDrop, val)
-                UIDropDownMenu_SetText(f.displayTypeDrop, text)
-                -- Save
-                local key = MSWA.selectedSpellID; if not key then return end
-                local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-                s2.displayType = (val == "BAR") and "BAR" or nil
-                MSWA_InvalidateIconCache()
-                MSWA_UpdateDetailPanel()
-            end
-            info.checked = (f._displayTypeVal == val)
-            if tip then info.tooltipTitle = text; info.tooltipText = tip; info.tooltipOnButton = true end
-            UIDropDownMenu_AddButton(info, level)
-        end
-        AddDT("Icon", "ICON", "Standard icon with cooldown swipe.\nClassic WoW addon style.")
-        AddDT("Progress Bar", "BAR", "Horizontal bar with icon, name, timer.\nLike WeakAuras / Blizzard buff bars.")
-    end)
-    UIDropDownMenu_SetSelectedValue(f.displayTypeDrop, "ICON")
-    UIDropDownMenu_SetText(f.displayTypeDrop, "Icon")
-
-    -- ======= Bar Settings (shown only in BAR mode) =======
-    f._barSettingsFrame = CreateFrame("Frame", nil, dp)
-    f._barSettingsFrame:SetPoint("TOPLEFT", f.displayTypeDrop, "BOTTOMLEFT", 16, -4)
-    f._barSettingsFrame:SetSize(400, 320)
-    f._barSettingsFrame:Hide()
-    local bsf = f._barSettingsFrame
-
-    -- Bar Name (custom display name)
-    f.barNameLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barNameLabel:SetPoint("TOPLEFT", 0, 0)
-    f.barNameLabel:SetText("Name:")
-    f.barNameEdit = CreateFrame("EditBox", nil, bsf, "InputBoxTemplate")
-    f.barNameEdit:SetSize(180, 20); f.barNameEdit:SetPoint("LEFT", f.barNameLabel, "RIGHT", 6, 0)
-    f.barNameEdit:SetAutoFocus(false)
-
-    local function SaveBarName()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local db2 = MSWA_GetDB(); db2.customNames = db2.customNames or {}
-        local txt = f.barNameEdit:GetText() or ""
-        txt = txt:gsub("^%s+", ""):gsub("%s+$", "")
-        if txt == "" then
-            db2.customNames[key] = nil
-        else
-            db2.customNames[key] = txt
-        end
-        MSWA_InvalidateIconCache()
-    end
-    f.barNameEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveBarName() end)
-    f.barNameEdit:SetScript("OnEditFocusLost", SaveBarName)
-    f.barNameEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    -- Bar Width
-    f.barWidthLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barWidthLabel:SetPoint("TOPLEFT", f.barNameLabel, "BOTTOMLEFT", 0, -8)
-    f.barWidthLabel:SetText("Bar Width:")
-    f.barWidthEdit = CreateFrame("EditBox", nil, bsf, "InputBoxTemplate")
-    f.barWidthEdit:SetSize(60, 20); f.barWidthEdit:SetPoint("LEFT", f.barWidthLabel, "RIGHT", 6, 0)
-    f.barWidthEdit:SetAutoFocus(false); f.barWidthEdit:SetNumeric(true)
-
-    -- Bar Height
-    f.barHeightLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barHeightLabel:SetPoint("TOPLEFT", f.barWidthLabel, "BOTTOMLEFT", 0, -8)
-    f.barHeightLabel:SetText("Bar Height:")
-    f.barHeightEdit = CreateFrame("EditBox", nil, bsf, "InputBoxTemplate")
-    f.barHeightEdit:SetSize(60, 20); f.barHeightEdit:SetPoint("LEFT", f.barHeightLabel, "RIGHT", 6, 0)
-    f.barHeightEdit:SetAutoFocus(false); f.barHeightEdit:SetNumeric(true)
-
-    -- Bar Font Size
-    f.barFontLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barFontLabel:SetPoint("LEFT", f.barHeightEdit, "RIGHT", 16, 0)
-    f.barFontLabel:SetText("Font:")
-    f.barFontEdit = CreateFrame("EditBox", nil, bsf, "InputBoxTemplate")
-    f.barFontEdit:SetSize(40, 20); f.barFontEdit:SetPoint("LEFT", f.barFontLabel, "RIGHT", 6, 0)
-    f.barFontEdit:SetAutoFocus(false); f.barFontEdit:SetNumeric(true)
-
-    -- Bar Color
-    f.barColorLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barColorLabel:SetPoint("TOPLEFT", f.barHeightLabel, "BOTTOMLEFT", 0, -8)
-    f.barColorLabel:SetText("Bar Color:")
-    f.barColorBtn = CreateFrame("Button", nil, bsf)
-    f.barColorBtn:SetSize(18, 18); f.barColorBtn:SetPoint("LEFT", f.barColorLabel, "RIGHT", 8, 0)
-    f.barColorSwatch = f.barColorBtn:CreateTexture(nil, "ARTWORK"); f.barColorSwatch:SetAllPoints()
-    f.barColorSwatch:SetColorTexture(0.9, 0.7, 0.0, 1)
-    f.barColorBorder = f.barColorBtn:CreateTexture(nil, "BORDER")
-    f.barColorBorder:SetPoint("TOPLEFT", -1, 1); f.barColorBorder:SetPoint("BOTTOMRIGHT", 1, -1)
-    f.barColorBorder:SetColorTexture(0, 0, 0, 1)
-
-    f.barColorBtn:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local db2 = MSWA_GetDB()
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(db2, key))
-        local bc = s2.barColor or { r = 0.9, g = 0.7, b = 0.0 }
-        local function OnColorChanged()
-            local r, g, b = ColorPickerFrame:GetColorRGB()
-            s2.barColor = { r = r, g = g, b = b }
-            f.barColorSwatch:SetColorTexture(r, g, b, 1)
-            MSWA_InvalidateIconCache()
-        end
-        local function OnCancel(prev)
-            s2.barColor = { r = prev.r, g = prev.g, b = prev.b }
-            f.barColorSwatch:SetColorTexture(prev.r, prev.g, prev.b, 1)
-            MSWA_InvalidateIconCache()
-        end
-        ColorPickerFrame:SetColorRGB(bc.r, bc.g, bc.b)
-        ColorPickerFrame.hasOpacity = false
-        ColorPickerFrame.func = OnColorChanged
-        ColorPickerFrame.cancelFunc = OnCancel
-        ColorPickerFrame.previousValues = { r = bc.r, g = bc.g, b = bc.b }
-        ColorPickerFrame:Show()
-    end)
-
-    -- Show Name checkbox
-    f.barShowNameCheck = CreateFrame("CheckButton", nil, bsf, "ChatConfigCheckButtonTemplate")
-    f.barShowNameCheck:SetPoint("TOPLEFT", f.barColorLabel, "BOTTOMLEFT", -4, -6)
-    f.barShowNameLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barShowNameLabel:SetPoint("LEFT", f.barShowNameCheck, "RIGHT", 2, 0)
-    f.barShowNameLabel:SetText("Show spell name")
-
-    -- Show Timer checkbox
-    f.barShowTimerCheck = CreateFrame("CheckButton", nil, bsf, "ChatConfigCheckButtonTemplate")
-    f.barShowTimerCheck:SetPoint("TOPLEFT", f.barShowNameCheck, "BOTTOMLEFT", 0, -2)
-    f.barShowTimerLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barShowTimerLabel:SetPoint("LEFT", f.barShowTimerCheck, "RIGHT", 2, 0)
-    f.barShowTimerLabel:SetText("Show timer text")
-
-    -- Show Spark checkbox
-    f.barShowSparkCheck = CreateFrame("CheckButton", nil, bsf, "ChatConfigCheckButtonTemplate")
-    f.barShowSparkCheck:SetPoint("TOPLEFT", f.barShowTimerCheck, "BOTTOMLEFT", 0, -2)
-    f.barShowSparkLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barShowSparkLabel:SetPoint("LEFT", f.barShowSparkCheck, "RIGHT", 2, 0)
-    f.barShowSparkLabel:SetText("Show spark (bright edge)")
-
-    -- Show Icon checkbox
-    f.barShowIconCheck = CreateFrame("CheckButton", nil, bsf, "ChatConfigCheckButtonTemplate")
-    f.barShowIconCheck:SetPoint("TOPLEFT", f.barShowSparkCheck, "BOTTOMLEFT", 0, -6)
-    f.barShowIconLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barShowIconLabel:SetPoint("LEFT", f.barShowIconCheck, "RIGHT", 2, 0)
-    f.barShowIconLabel:SetText("Show spell icon")
-
-    -- Icon Position dropdown
-    f.barIconPosLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barIconPosLabel:SetPoint("LEFT", f.barShowIconLabel, "RIGHT", 16, 0)
-    f.barIconPosLabel:SetText("Position:")
-    f.barIconPosDrop = CreateFrame("Frame", "MSWA_BarIconPosDD", bsf, "UIDropDownMenuTemplate")
-    f.barIconPosDrop:SetPoint("LEFT", f.barIconPosLabel, "RIGHT", -12, -3)
-    UIDropDownMenu_SetWidth(f.barIconPosDrop, 80)
-
-    local ICON_POS_LABELS = { LEFT = "Left", RIGHT = "Right", TOP = "Top", BOTTOM = "Bottom" }
-    local ICON_POS_ORDER  = { "LEFT", "RIGHT", "TOP", "BOTTOM" }
-
-    UIDropDownMenu_Initialize(f.barIconPosDrop, function(self, level)
-        if not level then return end
-        for _, val in ipairs(ICON_POS_ORDER) do
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = ICON_POS_LABELS[val]; info.value = val
-            info.func = function()
-                UIDropDownMenu_SetSelectedValue(f.barIconPosDrop, val)
-                UIDropDownMenu_SetText(f.barIconPosDrop, ICON_POS_LABELS[val])
-                local key = MSWA.selectedSpellID; if not key then return end
-                local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-                s2.barIconPos = val
-                MSWA_InvalidateIconCache()
-            end
-            info.checked = (UIDropDownMenu_GetSelectedValue(f.barIconPosDrop) == val)
-            UIDropDownMenu_AddButton(info, level)
-        end
-    end)
-    UIDropDownMenu_SetSelectedValue(f.barIconPosDrop, "LEFT")
-    UIDropDownMenu_SetText(f.barIconPosDrop, "Left")
-
-    -- Fill Direction dropdown
-    f.barFillDirLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barFillDirLabel:SetPoint("TOPLEFT", f.barShowIconCheck, "BOTTOMLEFT", 4, -8)
-    f.barFillDirLabel:SetText("Fill direction:")
-    f.barFillDirDrop = CreateFrame("Frame", "MSWA_BarFillDirDD", bsf, "UIDropDownMenuTemplate")
-    f.barFillDirDrop:SetPoint("LEFT", f.barFillDirLabel, "RIGHT", -12, -3)
-    UIDropDownMenu_SetWidth(f.barFillDirDrop, 140)
-
-    local FILL_LABELS = {
-        LR = "Left \226\134\146 Right",
-        RL = "Right \226\134\146 Left",
-        BT = "Bottom \226\134\146 Top  (vertical)",
-        TB = "Top \226\134\146 Bottom  (vertical)",
-    }
-    local FILL_ORDER = { "LR", "RL", "BT", "TB" }
-    local FILL_TIPS = {
-        LR = "Standard horizontal bar.\nFills from left to right.",
-        RL = "Reversed horizontal bar.\nFills from right to left.",
-        BT = "Vertical bar, fills upward.\nWidth/Height swap automatically.",
-        TB = "Vertical bar, fills downward.\nWidth/Height swap automatically.",
-    }
-
-    UIDropDownMenu_Initialize(f.barFillDirDrop, function(self, level)
-        if not level then return end
-        for _, val in ipairs(FILL_ORDER) do
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = FILL_LABELS[val]; info.value = val
-            info.func = function()
-                UIDropDownMenu_SetSelectedValue(f.barFillDirDrop, val)
-                UIDropDownMenu_SetText(f.barFillDirDrop, FILL_LABELS[val])
-                local key = MSWA.selectedSpellID; if not key then return end
-                local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-                s2.barFillDir = val
-                MSWA_InvalidateIconCache()
-            end
-            info.checked = (UIDropDownMenu_GetSelectedValue(f.barFillDirDrop) == val)
-            if FILL_TIPS[val] then info.tooltipTitle = FILL_LABELS[val]; info.tooltipText = FILL_TIPS[val]; info.tooltipOnButton = true end
-            UIDropDownMenu_AddButton(info, level)
-        end
-    end)
-    UIDropDownMenu_SetSelectedValue(f.barFillDirDrop, "LR")
-    UIDropDownMenu_SetText(f.barFillDirDrop, FILL_LABELS["LR"])
-
-    -- Bar Texture (Gamz: Buff Bars don't have option to change Texture)
-    f.barTextureLabel = bsf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.barTextureLabel:SetPoint("TOPLEFT", f.barFillDirLabel, "BOTTOMLEFT", 0, -12)
-    f.barTextureLabel:SetText("Texture path:")
-    f.barTextureEdit = CreateFrame("EditBox", nil, bsf, "InputBoxTemplate")
-    f.barTextureEdit:SetSize(260, 20); f.barTextureEdit:SetPoint("LEFT", f.barTextureLabel, "RIGHT", 6, 0)
-    f.barTextureEdit:SetAutoFocus(false)
-    local function SaveBarTexture()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local txt = (f.barTextureEdit:GetText() or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        s2.barTexture = (txt ~= "") and txt or nil
-        MSWA_InvalidateIconCache()
-    end
-    f.barTextureEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveBarTexture() end)
-    f.barTextureEdit:SetScript("OnEditFocusLost", SaveBarTexture)
-    f.barTextureEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    -- Bar settings save handlers
-    local function SaveBarSize()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.barWidth = tonumber(f.barWidthEdit:GetText()) or 200
-        s2.barHeight = tonumber(f.barHeightEdit:GetText()) or 22
-        s2.barFontSize = tonumber(f.barFontEdit:GetText()) or 11
-        MSWA_InvalidateIconCache()
-    end
-    f.barWidthEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveBarSize() end)
-    f.barWidthEdit:SetScript("OnEditFocusLost", SaveBarSize)
-    f.barHeightEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveBarSize() end)
-    f.barHeightEdit:SetScript("OnEditFocusLost", SaveBarSize)
-    f.barFontEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveBarSize() end)
-    f.barFontEdit:SetScript("OnEditFocusLost", SaveBarSize)
-
-    f.barShowNameCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.barShowName = self:GetChecked() and true or false; MSWA_InvalidateIconCache()
-    end)
-    f.barShowTimerCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.barShowTimer = self:GetChecked() and true or false; MSWA_InvalidateIconCache()
-    end)
-    f.barShowSparkCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.barShowSpark = self:GetChecked() and true or false; MSWA_InvalidateIconCache()
-    end)
-    f.barShowIconCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.barShowIcon = self:GetChecked() and true or false
-        -- Show/hide icon pos dropdown
-        local show = self:GetChecked()
-        f.barIconPosLabel:SetShown(show)
-        f.barIconPosDrop:SetShown(show)
-        MSWA_InvalidateIconCache()
-    end)
-
-    -- ======= Separator before Icon-specific settings =======
-    local dtSep = dp:CreateTexture(nil, "ARTWORK")
-    dtSep:SetSize(400, 1); dtSep:SetColorTexture(1, 1, 1, 0.08)
-    f._displayTypeSep = dtSep
-
-    local labelX = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); labelX:SetText("Offset X:")
-    f._labelX = labelX
-    f.detailX = CreateFrame("EditBox", nil, dp, "InputBoxTemplate"); f.detailX:SetSize(70, 20); f.detailX:SetPoint("LEFT", labelX, "RIGHT", 6, 0); f.detailX:SetAutoFocus(false)
-    f.detailXMinus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.detailXMinus:SetSize(20, 20); f.detailXMinus:SetPoint("LEFT", f.detailX, "RIGHT", 2, 0); f.detailXMinus:SetText("-")
-    f.detailXPlus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.detailXPlus:SetSize(20, 20); f.detailXPlus:SetPoint("LEFT", f.detailXMinus, "RIGHT", 2, 0); f.detailXPlus:SetText("+")
-    local labelY = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); labelY:SetPoint("TOPLEFT", labelX, "BOTTOMLEFT", 0, -10); labelY:SetText("Offset Y:")
-    f.detailY = CreateFrame("EditBox", nil, dp, "InputBoxTemplate"); f.detailY:SetSize(70, 20); f.detailY:SetPoint("LEFT", labelY, "RIGHT", 6, 0); f.detailY:SetAutoFocus(false)
-    f.detailYMinus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.detailYMinus:SetSize(20, 20); f.detailYMinus:SetPoint("LEFT", f.detailY, "RIGHT", 2, 0); f.detailYMinus:SetText("-")
-    f.detailYPlus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.detailYPlus:SetSize(20, 20); f.detailYPlus:SetPoint("LEFT", f.detailYMinus, "RIGHT", 2, 0); f.detailYPlus:SetText("+")
-    local labelW = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); labelW:SetPoint("TOPLEFT", labelY, "BOTTOMLEFT", 0, -14); labelW:SetText("Width:")
-    f.detailW = CreateFrame("EditBox", nil, dp, "InputBoxTemplate"); f.detailW:SetSize(70, 20); f.detailW:SetPoint("LEFT", labelW, "RIGHT", 6, 0); f.detailW:SetAutoFocus(false)
-    local labelH = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); labelH:SetPoint("TOPLEFT", labelW, "BOTTOMLEFT", 0, -10); labelH:SetText("Height:")
-    f.detailH = CreateFrame("EditBox", nil, dp, "InputBoxTemplate"); f.detailH:SetSize(70, 20); f.detailH:SetPoint("LEFT", labelH, "RIGHT", 6, 0); f.detailH:SetAutoFocus(false)
-
-    -- Custom Icon override
-    f.customIconLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.customIconLabel:SetPoint("TOPLEFT", labelH, "BOTTOMLEFT", 0, -14)
-    f.customIconLabel:SetText("Custom Icon:")
-
-    f.customIconEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate")
-    f.customIconEdit:SetSize(70, 20)
-    f.customIconEdit:SetPoint("LEFT", f.customIconLabel, "RIGHT", 6, 0)
-    f.customIconEdit:SetAutoFocus(false)
-    f.customIconEdit:SetNumeric(true)
-
-    f.customIconPreview = dp:CreateTexture(nil, "ARTWORK")
-    f.customIconPreview:SetSize(20, 20)
-    f.customIconPreview:SetPoint("LEFT", f.customIconEdit, "RIGHT", 6, 0)
-    f.customIconPreview:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-    f.customIconPreview:Hide()
-
-    f.customIconClear = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate")
-    f.customIconClear:SetSize(20, 20)
-    f.customIconClear:SetPoint("LEFT", f.customIconPreview, "RIGHT", 4, 0)
-    f.customIconClear:SetText("X")
-    f.customIconClear:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.customIconID = nil
-        if f.customIconEdit then f.customIconEdit:SetText("") end
-        if f.customIconPreview then f.customIconPreview:Hide() end
-        MSWA_InvalidateIconCache(); MSWA_RefreshOptionsList()
-    end)
-
-    local function ApplyCustomIcon()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local val = tonumber(f.customIconEdit:GetText())
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        if val and val > 0 then
-            s2.customIconID = val
-            f.customIconPreview:SetTexture(val)
-            f.customIconPreview:Show()
-        else
-            s2.customIconID = nil
-            f.customIconPreview:Hide()
-        end
-        MSWA_InvalidateIconCache(); MSWA_RefreshOptionsList()
-    end
-    f.customIconEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyCustomIcon() end)
-    f.customIconEdit:SetScript("OnEditFocusLost", function() ApplyCustomIcon() end)
-
-    f.fontLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.fontLabel:SetPoint("TOPLEFT", f.customIconLabel, "BOTTOMLEFT", 0, -18); f.fontLabel:SetText("Font:")
-    f.fontDrop = CreateFrame("Frame", "MSWA_FontDropDown", dp, "UIDropDownMenuTemplate"); f.fontDrop:SetPoint("LEFT", f.fontLabel, "RIGHT", -10, -3)
-    f.fontPreview = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.fontPreview:SetPoint("LEFT", f.fontDrop, "RIGHT", -10, 0); f.fontPreview:SetText("AaBbYyZz 123")
-
-    f.textSizeLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.textSizeLabel:SetPoint("TOPLEFT", f.fontLabel, "BOTTOMLEFT", 0, -16); f.textSizeLabel:SetText("Text size:")
-    f.textSizeEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate"); f.textSizeEdit:SetSize(50, 20); f.textSizeEdit:SetPoint("LEFT", f.textSizeLabel, "RIGHT", 6, 0); f.textSizeEdit:SetAutoFocus(false); f.textSizeEdit:SetNumeric(true)
-    f.textSizeMinus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.textSizeMinus:SetSize(20, 20); f.textSizeMinus:SetPoint("LEFT", f.textSizeEdit, "RIGHT", 2, 0); f.textSizeMinus:SetText("-")
-    f.textSizePlus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.textSizePlus:SetSize(20, 20); f.textSizePlus:SetPoint("LEFT", f.textSizeMinus, "RIGHT", 2, 0); f.textSizePlus:SetText("+")
-
-    f.textPosLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.textPosLabel:SetPoint("LEFT", f.textSizePlus, "RIGHT", 14, 0); f.textPosLabel:SetText("Pos:")
-    f.textPosDrop = CreateFrame("Frame", "MSWA_TextPosDropDown", dp, "UIDropDownMenuTemplate"); f.textPosDrop:SetPoint("LEFT", f.textPosLabel, "RIGHT", -10, -3)
-
-    f.textColorLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.textColorLabel:SetPoint("TOPLEFT", f.textSizeLabel, "BOTTOMLEFT", 0, -12); f.textColorLabel:SetText("Text color:")
-    f.textColorBtn = CreateFrame("Button", nil, dp); f.textColorBtn:SetSize(18, 18); f.textColorBtn:SetPoint("LEFT", f.textColorLabel, "RIGHT", 8, 0); f.textColorBtn:EnableMouse(true)
-    f.textColorSwatch = f.textColorBtn:CreateTexture(nil, "ARTWORK"); f.textColorSwatch:SetAllPoints(true); f.textColorSwatch:SetColorTexture(1, 1, 1, 1)
-    f.textColorBorder = f.textColorBtn:CreateTexture(nil, "BORDER"); f.textColorBorder:SetPoint("TOPLEFT", -1, 1); f.textColorBorder:SetPoint("BOTTOMRIGHT", 1, -1); f.textColorBorder:SetColorTexture(0, 0, 0, 1)
-
-    f.grayCooldownCheck = CreateFrame("CheckButton", nil, dp, "ChatConfigCheckButtonTemplate"); f.grayCooldownCheck:SetPoint("TOPLEFT", f.textColorLabel, "BOTTOMLEFT", -4, -14)
-    f.grayCooldownLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); f.grayCooldownLabel:SetPoint("LEFT", f.grayCooldownCheck, "RIGHT", 2, 0); f.grayCooldownLabel:SetText("Grayscale on cooldown")
-    f.grayCooldownCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key)); s.grayOnCooldown = self:GetChecked() and true or nil
-        MSWA_RequestUpdateSpells()
-    end)
-
-    -- Grayscale on zero item count
-    f.grayZeroCountCheck = CreateFrame("CheckButton", nil, dp, "ChatConfigCheckButtonTemplate")
-    f.grayZeroCountCheck:SetPoint("TOPLEFT", f.grayCooldownCheck, "BOTTOMLEFT", 0, -4)
-    f.grayZeroCountLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.grayZeroCountLabel:SetPoint("LEFT", f.grayZeroCountCheck, "RIGHT", 2, 0)
-    f.grayZeroCountLabel:SetText("Show grayed when item count is 0")
-    f.grayZeroCountCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.showOnZeroCount = self:GetChecked() and true or nil
-        MSWA_RequestUpdateSpells()
-    end)
-
-    -- Swipe darkens on loss
-    f.swipeDarkenCheck = CreateFrame("CheckButton", nil, dp, "ChatConfigCheckButtonTemplate")
-    f.swipeDarkenCheck:SetPoint("TOPLEFT", f.grayZeroCountCheck, "BOTTOMLEFT", 0, -4)
-    f.swipeDarkenLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.swipeDarkenLabel:SetPoint("LEFT", f.swipeDarkenCheck, "RIGHT", 2, 0)
-    f.swipeDarkenLabel:SetText("Swipe darkens on loss")
-    f.swipeDarkenCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        -- Nil == default (standard Blizzard swipe direction).
-        -- True == "darkens on loss" (reverse swipe).
-        s2.swipeDarken = self:GetChecked() and true or nil
-        MSWA_RequestUpdateSpells()
-    end)
-
-    -- Show decimal (one decimal place for timers < 10s)
-    f.showDecimalCheck = CreateFrame("CheckButton", nil, dp, "ChatConfigCheckButtonTemplate")
-    f.showDecimalCheck:SetPoint("TOPLEFT", f.swipeDarkenCheck, "BOTTOMLEFT", 0, -4)
-    f.showDecimalLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.showDecimalLabel:SetPoint("LEFT", f.showDecimalCheck, "RIGHT", 2, 0)
-    f.showDecimalLabel:SetText("Show decimal (e.g. 3.7 instead of 4)")
-    f.showDecimalCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.showDecimal = self:GetChecked() and true or false
-        MSWA_InvalidateIconCache()
-        MSWA_RequestUpdateSpells()
-    end)
-
-    -- ======= Alpha Sliders Section =======
-    local alphaSep = dp:CreateTexture(nil, "ARTWORK")
-    alphaSep:SetPoint("TOPLEFT", f.showDecimalCheck, "BOTTOMLEFT", 4, -10)
-    alphaSep:SetSize(400, 1); alphaSep:SetColorTexture(1, 1, 1, 0.12)
-
-    local alphaTitle = dp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    alphaTitle:SetPoint("TOPLEFT", alphaSep, "BOTTOMLEFT", 0, -6)
-    alphaTitle:SetText("|cffffcc00Alpha / Opacity|r")
-
-    -- Helper to create a clean labeled alpha slider (0% - 100%)
-    local function CreateAlphaSlider(parent, label, anchorFrame, yOff, settingsKey)
-        local row = CreateFrame("Frame", nil, parent)
-        row:SetHeight(22)
-        row:SetPoint("TOPLEFT", anchorFrame, "BOTTOMLEFT", 0, yOff)
-        row:SetPoint("RIGHT", parent, "RIGHT", -10, 0)
-
-        local lbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        lbl:SetPoint("LEFT", row, "LEFT", 0, 0)
-        lbl:SetWidth(100)
-        lbl:SetJustifyH("LEFT")
-        lbl:SetText(label)
-
-        local valText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        valText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-        valText:SetWidth(36)
-        valText:SetJustifyH("RIGHT")
-
-        local slider = CreateFrame("Slider", nil, row, "OptionsSliderTemplate")
-        slider:SetPoint("LEFT", lbl, "RIGHT", 4, 0)
-        slider:SetPoint("RIGHT", valText, "LEFT", -8, 0)
-        slider:SetHeight(16)
-        slider:SetMinMaxValues(0, 100)
-        slider:SetValueStep(5)
-        slider:SetObeyStepOnDrag(true)
-        -- Hide built-in template labels to prevent clipping
-        slider.Low:SetText(""); slider.Low:Hide()
-        slider.High:SetText(""); slider.High:Hide()
-        slider.Text:SetText(""); slider.Text:Hide()
-
-        slider:SetScript("OnValueChanged", function(self, val)
-            val = math.floor(val + 0.5)
-            valText:SetText(val .. "%")
-            local key = MSWA.selectedSpellID; if not key then return end
-            local ss = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-            if val >= 100 then
-                ss[settingsKey] = nil
-            else
-                ss[settingsKey] = val / 100
-            end
-            MSWA_RequestUpdateSpells()
-        end)
-
-        return slider, row, valText
-    end
-
-    f.cdAlphaSlider, f.cdAlphaRow, f.cdAlphaVal = CreateAlphaSlider(dp, "On Cooldown:", alphaTitle, -4, "cdAlpha")
-    f.oocAlphaSlider, f.oocAlphaRow, f.oocAlphaVal = CreateAlphaSlider(dp, "Out of Combat:", f.cdAlphaRow, -2, "oocAlpha")
-    f.combatAlphaSlider, f.combatAlphaRow, f.combatAlphaVal = CreateAlphaSlider(dp, "In Combat:", f.oocAlphaRow, -2, "combatAlpha")
-    f.readyAlphaSlider, f.readyAlphaRow, f.readyAlphaVal = CreateAlphaSlider(dp, "When Ready:", f.combatAlphaRow, -2, "readyAlpha")
-
-    -- ======= Stack Text Section =======
-    local stackSep = dp:CreateTexture(nil, "ARTWORK")
-    stackSep:SetPoint("TOPLEFT", f.readyAlphaRow, "BOTTOMLEFT", 0, -10)
-    stackSep:SetSize(400, 1); stackSep:SetColorTexture(1, 1, 1, 0.12)
-
-    f.stackShowLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.stackShowLabel:SetPoint("TOPLEFT", stackSep, "BOTTOMLEFT", 0, -8)
-    f.stackShowLabel:SetText("|cffffcc00Stacks|r")
-
-    f.stackShowMode = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate")
-    f.stackShowMode:SetSize(100, 20); f.stackShowMode:SetPoint("LEFT", f.stackShowLabel, "RIGHT", 10, 0)
-    f.stackShowMode:SetText("Auto")
-
-    local stackShowModes = { "auto", "show", "hide" }
-    local stackShowLabels = { auto = "Auto", show = "Force Show", hide = "Force Hide" }
-    f.stackShowMode:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local cur = s2.stackShowMode or "auto"
-        local idx = 1
-        for i, m in ipairs(stackShowModes) do if m == cur then idx = i; break end end
-        idx = idx % #stackShowModes + 1
-        s2.stackShowMode = stackShowModes[idx]
-        f.stackShowMode:SetText(stackShowLabels[s2.stackShowMode] or "Auto")
-        MSWA_RequestUpdateSpells()
-    end)
-
-    -- Hide stacks on cooldown toggle (v6)
-    f.hideStacksOnCDCheck = CreateFrame("CheckButton", nil, dp, "ChatConfigCheckButtonTemplate")
-    f.hideStacksOnCDCheck:SetPoint("TOPLEFT", f.stackShowLabel, "BOTTOMLEFT", -2, -4)
-    f.hideStacksOnCDLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.hideStacksOnCDLabel:SetPoint("LEFT", f.hideStacksOnCDCheck, "RIGHT", 2, 0)
-    f.hideStacksOnCDLabel:SetText("Hide stacks while on cooldown")
-    f.hideStacksOnCDCheck:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.hideStacksOnCooldown = self:GetChecked() and true or false
-        MSWA_RequestUpdateSpells()
-    end)
-
-    -- Stack Font
-    f.stackFontLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.stackFontLabel:SetPoint("TOPLEFT", f.hideStacksOnCDCheck, "BOTTOMLEFT", 2, -8)
-    f.stackFontLabel:SetText("Font:")
-    f.stackFontDrop = CreateFrame("Frame", "MSWA_StackFontDropDown", dp, "UIDropDownMenuTemplate")
-    f.stackFontDrop:SetPoint("LEFT", f.stackFontLabel, "RIGHT", -10, -3)
-
-    -- Stack Size
-    f.stackSizeLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.stackSizeLabel:SetPoint("TOPLEFT", f.stackFontLabel, "BOTTOMLEFT", 0, -16)
-    f.stackSizeLabel:SetText("Size:")
-    f.stackSizeEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate")
-    f.stackSizeEdit:SetSize(50, 20); f.stackSizeEdit:SetPoint("LEFT", f.stackSizeLabel, "RIGHT", 6, 0); f.stackSizeEdit:SetAutoFocus(false); f.stackSizeEdit:SetNumeric(true)
-    f.stackSizeMinus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.stackSizeMinus:SetSize(20, 20); f.stackSizeMinus:SetPoint("LEFT", f.stackSizeEdit, "RIGHT", 2, 0); f.stackSizeMinus:SetText("-")
-    f.stackSizePlus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.stackSizePlus:SetSize(20, 20); f.stackSizePlus:SetPoint("LEFT", f.stackSizeMinus, "RIGHT", 2, 0); f.stackSizePlus:SetText("+")
-
-    -- Stack Pos
-    f.stackPosLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.stackPosLabel:SetPoint("LEFT", f.stackSizePlus, "RIGHT", 14, 0)
-    f.stackPosLabel:SetText("Pos:")
-    f.stackPosDrop = CreateFrame("Frame", "MSWA_StackPosDropDown", dp, "UIDropDownMenuTemplate")
-    f.stackPosDrop:SetPoint("LEFT", f.stackPosLabel, "RIGHT", -10, -3)
-
-    -- Stack Color
-    f.stackColorLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.stackColorLabel:SetPoint("TOPLEFT", f.stackSizeLabel, "BOTTOMLEFT", 0, -12)
-    f.stackColorLabel:SetText("Color:")
-    f.stackColorBtn = CreateFrame("Button", nil, dp); f.stackColorBtn:SetSize(18, 18); f.stackColorBtn:SetPoint("LEFT", f.stackColorLabel, "RIGHT", 8, 0); f.stackColorBtn:EnableMouse(true)
-    f.stackColorSwatch = f.stackColorBtn:CreateTexture(nil, "ARTWORK"); f.stackColorSwatch:SetAllPoints(true); f.stackColorSwatch:SetColorTexture(1, 1, 1, 1)
-    local stackColorBorder = f.stackColorBtn:CreateTexture(nil, "BORDER"); stackColorBorder:SetPoint("TOPLEFT", f.stackColorBtn, "TOPLEFT", -1, 1); stackColorBorder:SetPoint("BOTTOMRIGHT", f.stackColorBtn, "BOTTOMRIGHT", 1, -1); stackColorBorder:SetColorTexture(0, 0, 0, 1)
-
-    -- Stack Offset X/Y
-    f.stackOffXLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.stackOffXLabel:SetPoint("LEFT", f.stackColorBtn, "RIGHT", 16, 0)
-    f.stackOffXLabel:SetText("Offset X:")
-    f.stackOffXEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate")
-    f.stackOffXEdit:SetSize(40, 20); f.stackOffXEdit:SetPoint("LEFT", f.stackOffXLabel, "RIGHT", 4, 0); f.stackOffXEdit:SetAutoFocus(false)
-
-    f.stackOffYLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.stackOffYLabel:SetPoint("LEFT", f.stackOffXEdit, "RIGHT", 10, 0)
-    f.stackOffYLabel:SetText("Y:")
-    f.stackOffYEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate")
-    f.stackOffYEdit:SetSize(40, 20); f.stackOffYEdit:SetPoint("LEFT", f.stackOffYLabel, "RIGHT", 4, 0); f.stackOffYEdit:SetAutoFocus(false)
-
-    -- ======= Stack control scripts =======
-    -- Stack font dropdown
-    f._initStackFontDrop = function()
-        if not f.stackFontDrop or not UIDropDownMenu_Initialize then return end
-        if not MSWA.fontChoices then MSWA_RebuildFontChoices() end
-        UIDropDownMenu_SetWidth(f.stackFontDrop, 120)
-        if not f._mswaStackFontDropInitialized then
-            UIDropDownMenu_Initialize(f.stackFontDrop, function(self, level)
-                local db = MSWA_GetDB(); local auraKey = MSWA.selectedSpellID
-                local s2 = auraKey and select(1, MSWA_GetSpellSettings(db, auraKey)) or nil
-                local currentKey = (s2 and s2.stackFontKey) or (db and db.stackFontKey) or (db and db.fontKey) or "DEFAULT"
-                for _, data in ipairs(MSWA.fontChoices or {}) do
-                    local info = UIDropDownMenu_CreateInfo()
-                    info.text = data.label or data.key; info.value = data.key; info.checked = (data.key == currentKey)
-                    info.func = function()
-                        local key = MSWA.selectedSpellID
-                        local db2 = MSWA_GetDB()
-                        if key then
-                            local ss = select(1, MSWA_GetOrCreateSpellSettings(db2, key))
-                            if data.key == "DEFAULT" then ss.stackFontKey = nil else ss.stackFontKey = data.key end
-                        else
-                            -- No aura selected => set global stack default (nil follows global fontKey)
-                            db2.stackFontKey = (data.key == "DEFAULT") and nil or data.key
-                        end
-                        UIDropDownMenu_SetText(f.stackFontDrop, data.label or data.key); CloseDropDownMenus()
-                        MSWA_InvalidateIconCache()
-                    end
-                    UIDropDownMenu_AddButton(info, level)
-                end
-            end)
-            f._mswaStackFontDropInitialized = true
-        end
-        local db = MSWA_GetDB(); local auraKey = MSWA.selectedSpellID
-        local ss = auraKey and select(1, MSWA_GetSpellSettings(db, auraKey)) or nil
-        local fontKey = (ss and ss.stackFontKey) or (db and db.stackFontKey) or (db and db.fontKey) or "DEFAULT"
-        local label = "Default (Blizzard)"
-        for _, data in ipairs(MSWA.fontChoices or {}) do
-            if data.key == fontKey then label = data.label or data.key; break end
-        end
-        if UIDropDownMenu_SetText then UIDropDownMenu_SetText(f.stackFontDrop, label) end
-    end
-
-    -- Stack size +/-
-    local function ClampStackSize(v) v = tonumber(v) or 12; if v < 6 then v = 6 end; if v > 48 then v = 48 end; return v end
-    local function ApplyStackSize()
-        local key = MSWA.selectedSpellID
+    f.btnIDInfo = W.Button(bottomBar, "ID Info", 65, 22, function(self, button)
         local db = MSWA_GetDB()
-        local v = ClampStackSize(f.stackSizeEdit and f.stackSizeEdit:GetText())
-        if key then
-            local s2 = select(1, MSWA_GetOrCreateSpellSettings(db, key))
-            s2.stackFontSize = v
-        else
-            db.stackFontSize = v
-        end
-        if f.stackSizeEdit then f.stackSizeEdit:SetText(tostring(v)) end
-        MSWA_InvalidateIconCache()
-    end
-    if f.stackSizeEdit then
-        f.stackSizeEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyStackSize() end)
-        f.stackSizeEdit:SetScript("OnEditFocusLost", function() ApplyStackSize() end)
-    end
-    f.stackSizeMinus:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID
-        local db = MSWA_GetDB()
-        local cur = db.stackFontSize or 12
-        if key then
-            local s2 = select(1, MSWA_GetOrCreateSpellSettings(db, key))
-            cur = s2.stackFontSize or cur
-        end
-        local v = ClampStackSize((f.stackSizeEdit and f.stackSizeEdit:GetText()) or cur) - 1; v = ClampStackSize(v)
-        if key then
-            local s2 = select(1, MSWA_GetOrCreateSpellSettings(db, key))
-            s2.stackFontSize = v
-        else
-            db.stackFontSize = v
-        end
-        if f.stackSizeEdit then f.stackSizeEdit:SetText(tostring(v)) end
-        MSWA_InvalidateIconCache()
+        local on = not (db.showSpellID or db.showIconID)
+        db.showSpellID = on; db.showIconID = on
+        if on then MSWA_Print("Tooltip ID Info ON") else MSWA_Print("Tooltip ID Info OFF") end
     end)
-    f.stackSizePlus:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID
-        local db = MSWA_GetDB()
-        local cur = db.stackFontSize or 12
-        if key then
-            local s2 = select(1, MSWA_GetOrCreateSpellSettings(db, key))
-            cur = s2.stackFontSize or cur
-        end
-        local v = ClampStackSize((f.stackSizeEdit and f.stackSizeEdit:GetText()) or cur) + 1; v = ClampStackSize(v)
-        if key then
-            local s2 = select(1, MSWA_GetOrCreateSpellSettings(db, key))
-            s2.stackFontSize = v
-        else
-            db.stackFontSize = v
-        end
-        if f.stackSizeEdit then f.stackSizeEdit:SetText(tostring(v)) end
-        MSWA_InvalidateIconCache()
-    end)
-
-    -- Stack pos dropdown
-    if f.stackPosDrop and UIDropDownMenu_Initialize then
-        UIDropDownMenu_SetWidth(f.stackPosDrop, 120)
-        UIDropDownMenu_Initialize(f.stackPosDrop, function(self, level)
-            local db = MSWA_GetDB(); local key = MSWA.selectedSpellID
-            local s2 = key and select(1, MSWA_GetSpellSettings(db, key)) or nil
-            local cur = (s2 and s2.stackPoint) or (db and db.stackPoint) or "BOTTOMRIGHT"
-            for _, point in ipairs({"BOTTOMRIGHT","BOTTOMLEFT","TOPRIGHT","TOPLEFT","CENTER"}) do
-                local info = UIDropDownMenu_CreateInfo(); info.text = MSWA_GetTextPosLabel(point); info.checked = (tostring(cur) == tostring(point))
-                info.func = function()
-                    if key then
-                        local ss = select(1, MSWA_GetOrCreateSpellSettings(db, key)); ss.stackPoint = point
-                    else
-                        db.stackPoint = point
-                    end
-                    UIDropDownMenu_SetText(f.stackPosDrop, MSWA_GetTextPosLabel(point)); CloseDropDownMenus(); MSWA_InvalidateIconCache()
-                end
-                UIDropDownMenu_AddButton(info, level)
-            end
-        end)
-    end
-
-    -- Stack color picker
-    f.stackColorBtn:SetScript("OnClick", function()
-        local keyAtOpen = MSWA.selectedSpellID
-        local db3 = MSWA_GetDB()
-        local ss = keyAtOpen and select(1, MSWA_GetSpellSettings(db3, keyAtOpen)) or nil
-        local tc = (ss and ss.stackColor) or (db3 and db3.stackColor) or { r = 1, g = 1, b = 1 }
-        local r, g, b = tonumber(tc.r) or 1, tonumber(tc.g) or 1, tonumber(tc.b) or 1
-        local function ApplySC(nr, ng, nb)
-            if keyAtOpen then
-                local s3 = select(1, MSWA_GetOrCreateSpellSettings(db3, keyAtOpen))
-                if s3 then s3.stackColor = s3.stackColor or {}; s3.stackColor.r = nr; s3.stackColor.g = ng; s3.stackColor.b = nb end
-            else
-                db3.stackColor = db3.stackColor or {}; db3.stackColor.r = nr; db3.stackColor.g = ng; db3.stackColor.b = nb
-            end
-            if f.stackColorSwatch and MSWA_KeyEquals(MSWA.selectedSpellID, keyAtOpen) then f.stackColorSwatch:SetColorTexture(nr, ng, nb, 1) end
-            MSWA_InvalidateIconCache()
-        end
-        if ColorPickerFrame and ColorPickerFrame.SetupColorPickerAndShow then
-            local function OnChanged() local nr, ng, nb = ColorPickerFrame:GetColorRGB(); if type(nr) == "number" then ApplySC(nr, ng, nb) end end
-            ColorPickerFrame:SetupColorPickerAndShow({ r=r, g=g, b=b, hasOpacity=false, swatchFunc=OnChanged, func=OnChanged, okayFunc=OnChanged, cancelFunc=function(restore) if type(restore) == "table" then ApplySC(restore.r or r, restore.g or g, restore.b or b) else ApplySC(r, g, b) end end })
-        elseif ColorPickerFrame then
-            ColorPickerFrame.hasOpacity = false; ColorPickerFrame.previousValues = { r=r, g=g, b=b }
-            ColorPickerFrame.func = function() ApplySC(ColorPickerFrame:GetColorRGB()) end
-            ColorPickerFrame.cancelFunc = function(prev) if type(prev) == "table" then ApplySC(prev.r or r, prev.g or g, prev.b or b) else ApplySC(r, g, b) end end
-            ColorPickerFrame:SetColorRGB(r, g, b); ColorPickerFrame:Show()
-        end
-    end)
-
-    -- Stack offset apply
-    local function ApplyStackOffset()
-        local db = MSWA_GetDB()
-        local key = MSWA.selectedSpellID
-        local ox = tonumber(f.stackOffXEdit and f.stackOffXEdit:GetText()) or 0
-        local oy = tonumber(f.stackOffYEdit and f.stackOffYEdit:GetText()) or 0
-        if key then
-            local s2 = select(1, MSWA_GetOrCreateSpellSettings(db, key))
-            s2.stackOffsetX = ox
-            s2.stackOffsetY = oy
-        else
-            db.stackOffsetX = ox
-            db.stackOffsetY = oy
-        end
-        MSWA_InvalidateIconCache()
-    end
-    if f.stackOffXEdit then
-        f.stackOffXEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyStackOffset() end)
-        f.stackOffXEdit:SetScript("OnEditFocusLost", function() ApplyStackOffset() end)
-    end
-    if f.stackOffYEdit then
-        f.stackOffYEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyStackOffset() end)
-        f.stackOffYEdit:SetScript("OnEditFocusLost", function() ApplyStackOffset() end)
-    end
-
-    -- ======= Charge Tracker Section =======
-    -- User-defined charges: each cast consumes a charge,
-    -- recharge timer restores them. 0 charges = desaturated icon.
-    local chargeSep = dp:CreateTexture(nil, "ARTWORK")
-    chargeSep:SetPoint("TOPLEFT", f.stackColorLabel, "BOTTOMLEFT", 0, -10)
-    chargeSep:SetSize(400, 1); chargeSep:SetColorTexture(1, 1, 1, 0.12)
-
-    f.chargeHeaderLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.chargeHeaderLabel:SetPoint("TOPLEFT", chargeSep, "BOTTOMLEFT", 0, -8)
-    f.chargeHeaderLabel:SetText("|cff44ddffCharge Tracker|r  (requires aura mode 'Charges')")
-
-    -- Max Charges
-    f.chargeMaxLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.chargeMaxLabel:SetPoint("TOPLEFT", f.chargeHeaderLabel, "BOTTOMLEFT", 0, -10)
-    f.chargeMaxLabel:SetText("Max Charges:")
-    f.chargeMaxEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate")
-    f.chargeMaxEdit:SetSize(50, 20); f.chargeMaxEdit:SetPoint("LEFT", f.chargeMaxLabel, "RIGHT", 6, 0); f.chargeMaxEdit:SetAutoFocus(false); f.chargeMaxEdit:SetNumeric(true)
-    f.chargeMaxMinus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.chargeMaxMinus:SetSize(20, 20); f.chargeMaxMinus:SetPoint("LEFT", f.chargeMaxEdit, "RIGHT", 2, 0); f.chargeMaxMinus:SetText("-")
-    f.chargeMaxPlus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.chargeMaxPlus:SetSize(20, 20); f.chargeMaxPlus:SetPoint("LEFT", f.chargeMaxMinus, "RIGHT", 2, 0); f.chargeMaxPlus:SetText("+")
-
-    -- Recharge Duration (seconds)
-    f.chargeDurLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.chargeDurLabel:SetPoint("LEFT", f.chargeMaxPlus, "RIGHT", 14, 0)
-    f.chargeDurLabel:SetText("Recharge (sec):")
-    f.chargeDurEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate")
-    f.chargeDurEdit:SetSize(50, 20); f.chargeDurEdit:SetPoint("LEFT", f.chargeDurLabel, "RIGHT", 6, 0); f.chargeDurEdit:SetAutoFocus(false)
-
-    -- Reset Charges button
-    f.chargeResetBtn = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate")
-    f.chargeResetBtn:SetSize(100, 20); f.chargeResetBtn:SetPoint("TOPLEFT", f.chargeMaxLabel, "BOTTOMLEFT", 0, -10)
-    f.chargeResetBtn:SetText("Reset Charges")
-
-    -- Charge Font Size
-    f.chargeSizeLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.chargeSizeLabel:SetPoint("TOPLEFT", f.chargeResetBtn, "BOTTOMLEFT", 0, -10)
-    f.chargeSizeLabel:SetText("Size:")
-    f.chargeSizeEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate")
-    f.chargeSizeEdit:SetSize(50, 20); f.chargeSizeEdit:SetPoint("LEFT", f.chargeSizeLabel, "RIGHT", 6, 0); f.chargeSizeEdit:SetAutoFocus(false); f.chargeSizeEdit:SetNumeric(true)
-    f.chargeSizeMinus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.chargeSizeMinus:SetSize(20, 20); f.chargeSizeMinus:SetPoint("LEFT", f.chargeSizeEdit, "RIGHT", 2, 0); f.chargeSizeMinus:SetText("-")
-    f.chargeSizePlus = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate"); f.chargeSizePlus:SetSize(20, 20); f.chargeSizePlus:SetPoint("LEFT", f.chargeSizeMinus, "RIGHT", 2, 0); f.chargeSizePlus:SetText("+")
-
-    -- Charge Position
-    f.chargePosLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.chargePosLabel:SetPoint("LEFT", f.chargeSizePlus, "RIGHT", 14, 0)
-    f.chargePosLabel:SetText("Pos:")
-    f.chargePosDrop = CreateFrame("Frame", "MSWA_ChargePosDropDown", dp, "UIDropDownMenuTemplate")
-    f.chargePosDrop:SetPoint("LEFT", f.chargePosLabel, "RIGHT", -10, -3)
-
-    -- Charge Color
-    f.chargeColorLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.chargeColorLabel:SetPoint("TOPLEFT", f.chargeSizeLabel, "BOTTOMLEFT", 0, -12)
-    f.chargeColorLabel:SetText("Color:")
-    f.chargeColorBtn = CreateFrame("Button", nil, dp); f.chargeColorBtn:SetSize(18, 18); f.chargeColorBtn:SetPoint("LEFT", f.chargeColorLabel, "RIGHT", 8, 0); f.chargeColorBtn:EnableMouse(true)
-    f.chargeColorSwatch = f.chargeColorBtn:CreateTexture(nil, "ARTWORK"); f.chargeColorSwatch:SetAllPoints(true); f.chargeColorSwatch:SetColorTexture(1, 1, 1, 1)
-    local chargeBorder = f.chargeColorBtn:CreateTexture(nil, "BORDER"); chargeBorder:SetPoint("TOPLEFT", f.chargeColorBtn, "TOPLEFT", -1, 1); chargeBorder:SetPoint("BOTTOMRIGHT", f.chargeColorBtn, "BOTTOMRIGHT", 1, -1); chargeBorder:SetColorTexture(0, 0, 0, 1)
-
-    -- Charge Offset X/Y
-    f.chargeOffXLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.chargeOffXLabel:SetPoint("LEFT", f.chargeColorBtn, "RIGHT", 16, 0)
-    f.chargeOffXLabel:SetText("Offset X:")
-    f.chargeOffXEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate")
-    f.chargeOffXEdit:SetSize(40, 20); f.chargeOffXEdit:SetPoint("LEFT", f.chargeOffXLabel, "RIGHT", 4, 0); f.chargeOffXEdit:SetAutoFocus(false)
-
-    f.chargeOffYLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.chargeOffYLabel:SetPoint("LEFT", f.chargeOffXEdit, "RIGHT", 10, 0)
-    f.chargeOffYLabel:SetText("Y:")
-    f.chargeOffYEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate")
-    f.chargeOffYEdit:SetSize(40, 20); f.chargeOffYEdit:SetPoint("LEFT", f.chargeOffYLabel, "RIGHT", 4, 0); f.chargeOffYEdit:SetAutoFocus(false)
-
-    -- ======= Charge control scripts =======
-    local function ClampChargeMax(v) v = tonumber(v) or 3; if v < 1 then v = 1 end; if v > 20 then v = 20 end; return v end
-    local function ApplyChargeMax()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local v = ClampChargeMax(f.chargeMaxEdit and f.chargeMaxEdit:GetText())
-        s2.chargeMax = v
-        if f.chargeMaxEdit then f.chargeMaxEdit:SetText(tostring(v)) end
-        -- Reset runtime charges to new max
-        if MSWA._charges and MSWA._charges[key] then
-            MSWA._charges[key].remaining = v
-            MSWA._charges[key].rechargeStart = 0
-        end
-        MSWA_ForceUpdateSpells()
-    end
-    f.chargeMaxEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyChargeMax() end)
-    f.chargeMaxEdit:SetScript("OnEditFocusLost", function() ApplyChargeMax() end)
-    f.chargeMaxMinus:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.chargeMax = ClampChargeMax((s2.chargeMax or 3) - 1)
-        if f.chargeMaxEdit then f.chargeMaxEdit:SetText(tostring(s2.chargeMax)) end
-        if MSWA._charges and MSWA._charges[key] then
-            MSWA._charges[key].remaining = s2.chargeMax
-            MSWA._charges[key].rechargeStart = 0
-        end
-        MSWA_ForceUpdateSpells()
-    end)
-    f.chargeMaxPlus:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.chargeMax = ClampChargeMax((s2.chargeMax or 3) + 1)
-        if f.chargeMaxEdit then f.chargeMaxEdit:SetText(tostring(s2.chargeMax)) end
-        if MSWA._charges and MSWA._charges[key] then
-            MSWA._charges[key].remaining = s2.chargeMax
-            MSWA._charges[key].rechargeStart = 0
-        end
-        MSWA_ForceUpdateSpells()
-    end)
-
-    -- Recharge duration apply
-    local function ApplyChargeDuration()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local v = tonumber(f.chargeDurEdit and f.chargeDurEdit:GetText()) or 0
-        if v < 0 then v = 0 end
-        s2.chargeDuration = v
-        if f.chargeDurEdit then f.chargeDurEdit:SetText(tostring(v)) end
-        MSWA_ForceUpdateSpells()
-    end
-    f.chargeDurEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyChargeDuration() end)
-    f.chargeDurEdit:SetScript("OnEditFocusLost", function() ApplyChargeDuration() end)
-
-    -- Reset charges button
-    f.chargeResetBtn:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetSpellSettings(MSWA_GetDB(), key))
-        local maxC = (s2 and tonumber(s2.chargeMax)) or 3
-        MSWA._charges = MSWA._charges or {}
-        MSWA._charges[key] = { remaining = maxC, rechargeStart = 0 }
-        MSWA_ForceUpdateSpells()
-    end)
-
-    local function ClampChargeSize(v) v = tonumber(v) or 12; if v < 6 then v = 6 end; if v > 48 then v = 48 end; return v end
-    local function ApplyChargeSize()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local v = ClampChargeSize(f.chargeSizeEdit and f.chargeSizeEdit:GetText())
-        s2.chargeFontSize = v
-        if f.chargeSizeEdit then f.chargeSizeEdit:SetText(tostring(v)) end
-        MSWA_InvalidateIconCache()
-    end
-    if f.chargeSizeEdit then
-        f.chargeSizeEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyChargeSize() end)
-        f.chargeSizeEdit:SetScript("OnEditFocusLost", function() ApplyChargeSize() end)
-    end
-    f.chargeSizeMinus:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local cur = ClampChargeSize(s2.chargeFontSize or 12)
-        s2.chargeFontSize = ClampChargeSize(cur - 1)
-        if f.chargeSizeEdit then f.chargeSizeEdit:SetText(tostring(s2.chargeFontSize)) end
-        MSWA_InvalidateIconCache()
-    end)
-    f.chargeSizePlus:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local cur = ClampChargeSize(s2.chargeFontSize or 12)
-        s2.chargeFontSize = ClampChargeSize(cur + 1)
-        if f.chargeSizeEdit then f.chargeSizeEdit:SetText(tostring(s2.chargeFontSize)) end
-        MSWA_InvalidateIconCache()
-    end)
-
-    -- Charge position dropdown
-    if UIDropDownMenu_Initialize and UIDropDownMenu_SetWidth then
-        UIDropDownMenu_SetWidth(f.chargePosDrop, 100)
-        UIDropDownMenu_Initialize(f.chargePosDrop, function(self, level)
-            local posLabels = MSWA_TEXT_POS_LABELS or {}
-            local key = MSWA.selectedSpellID
-            local db3 = MSWA_GetDB()
-            local s3 = key and select(1, MSWA_GetSpellSettings(db3, key)) or nil
-            local curPos = (s3 and s3.chargePoint) or "BOTTOMRIGHT"
-            for pt, label in pairs(posLabels) do
-                local info = UIDropDownMenu_CreateInfo()
-                info.text = label; info.value = pt; info.checked = (pt == curPos)
-                info.func = function()
-                    local k2 = MSWA.selectedSpellID; if not k2 then return end
-                    local ss = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), k2))
-                    ss.chargePoint = pt
-                    UIDropDownMenu_SetText(f.chargePosDrop, label); CloseDropDownMenus()
-                    MSWA_InvalidateIconCache()
-                end
-                UIDropDownMenu_AddButton(info, level)
-            end
-        end)
-    end
-
-    -- Charge color picker
-    f.chargeColorBtn:SetScript("OnClick", function()
-        local keyAtOpen = MSWA.selectedSpellID
-        local db3 = MSWA_GetDB()
-        local ss = keyAtOpen and select(1, MSWA_GetSpellSettings(db3, keyAtOpen)) or nil
-        local tc = (ss and ss.chargeColor) or { r = 1, g = 1, b = 1 }
-        local r, g, b = tonumber(tc.r) or 1, tonumber(tc.g) or 1, tonumber(tc.b) or 1
-        local function ApplyCC(nr, ng, nb)
-            if keyAtOpen then
-                local s3 = select(1, MSWA_GetOrCreateSpellSettings(db3, keyAtOpen))
-                if s3 then s3.chargeColor = s3.chargeColor or {}; s3.chargeColor.r = nr; s3.chargeColor.g = ng; s3.chargeColor.b = nb end
-            end
-            if f.chargeColorSwatch and MSWA_KeyEquals(MSWA.selectedSpellID, keyAtOpen) then f.chargeColorSwatch:SetColorTexture(nr, ng, nb, 1) end
-            MSWA_InvalidateIconCache()
-        end
-        if ColorPickerFrame and ColorPickerFrame.SetupColorPickerAndShow then
-            local function OnChanged() local nr, ng, nb = ColorPickerFrame:GetColorRGB(); if type(nr) == "number" then ApplyCC(nr, ng, nb) end end
-            ColorPickerFrame:SetupColorPickerAndShow({ r=r, g=g, b=b, hasOpacity=false, swatchFunc=OnChanged, func=OnChanged, okayFunc=OnChanged, cancelFunc=function(restore) if type(restore) == "table" then ApplyCC(restore.r or r, restore.g or g, restore.b or b) else ApplyCC(r, g, b) end end })
-        elseif ColorPickerFrame then
-            ColorPickerFrame.hasOpacity = false; ColorPickerFrame.previousValues = { r=r, g=g, b=b }
-            ColorPickerFrame.func = function() ApplyCC(ColorPickerFrame:GetColorRGB()) end
-            ColorPickerFrame.cancelFunc = function(prev) if type(prev) == "table" then ApplyCC(prev.r or r, prev.g or g, prev.b or b) else ApplyCC(r, g, b) end end
-            ColorPickerFrame:SetColorRGB(r, g, b); ColorPickerFrame:Show()
-        end
-    end)
-
-    -- Charge offset apply
-    local function ApplyChargeOffset()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.chargeOffsetX = tonumber(f.chargeOffXEdit and f.chargeOffXEdit:GetText()) or 0
-        s2.chargeOffsetY = tonumber(f.chargeOffYEdit and f.chargeOffYEdit:GetText()) or 0
-        MSWA_InvalidateIconCache()
-    end
-    if f.chargeOffXEdit then
-        f.chargeOffXEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyChargeOffset() end)
-        f.chargeOffXEdit:SetScript("OnEditFocusLost", function() ApplyChargeOffset() end)
-    end
-    if f.chargeOffYEdit then
-        f.chargeOffYEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyChargeOffset() end)
-        f.chargeOffYEdit:SetScript("OnEditFocusLost", function() ApplyChargeOffset() end)
-    end
-
-    -- ======= Conditional 2nd Text Color =======
-    local tc2Sep = dp:CreateTexture(nil, "ARTWORK")
-    tc2Sep:SetPoint("TOPLEFT", f.chargeColorLabel, "BOTTOMLEFT", 0, -10)
-    tc2Sep:SetSize(400, 1); tc2Sep:SetColorTexture(1, 1, 1, 0.12)
-
-    f.tc2Check = CreateFrame("CheckButton", nil, dp, "ChatConfigCheckButtonTemplate")
-    f.tc2Check:SetPoint("TOPLEFT", tc2Sep, "BOTTOMLEFT", -4, -8)
-    f.tc2Label = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.tc2Label:SetPoint("LEFT", f.tc2Check, "RIGHT", 2, 0)
-    f.tc2Label:SetText("|cffffcc00Conditional text color|r")
-
-    -- 2nd color swatch
-    f.tc2ColorLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.tc2ColorLabel:SetPoint("TOPLEFT", f.tc2Check, "BOTTOMLEFT", 22, -8)
-    f.tc2ColorLabel:SetText("Color:")
-    f.tc2ColorBtn = CreateFrame("Button", nil, dp)
-    f.tc2ColorBtn:SetSize(18, 18); f.tc2ColorBtn:SetPoint("LEFT", f.tc2ColorLabel, "RIGHT", 6, 0); f.tc2ColorBtn:EnableMouse(true)
-    f.tc2ColorSwatch = f.tc2ColorBtn:CreateTexture(nil, "ARTWORK"); f.tc2ColorSwatch:SetAllPoints(true); f.tc2ColorSwatch:SetColorTexture(1, 0, 0, 1)
-    local tc2Border = f.tc2ColorBtn:CreateTexture(nil, "BORDER"); tc2Border:SetPoint("TOPLEFT", f.tc2ColorBtn, "TOPLEFT", -1, 1); tc2Border:SetPoint("BOTTOMRIGHT", f.tc2ColorBtn, "BOTTOMRIGHT", 1, -1); tc2Border:SetColorTexture(0, 0, 0, 1)
-
-    -- Condition button (cycles: TIMER_BELOW -> TIMER_ABOVE)
-    f.tc2CondLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.tc2CondLabel:SetPoint("LEFT", f.tc2ColorBtn, "RIGHT", 16, 0)
-    f.tc2CondLabel:SetText("When:")
-    f.tc2CondButton = CreateFrame("Button", nil, dp, "UIPanelButtonTemplate")
-    f.tc2CondButton:SetSize(90, 20); f.tc2CondButton:SetPoint("LEFT", f.tc2CondLabel, "RIGHT", 4, 0)
-
-    -- Threshold value (editbox right of button, then "sec" label)
-    f.tc2ValueEdit = CreateFrame("EditBox", nil, dp, "InputBoxTemplate")
-    f.tc2ValueEdit:SetSize(40, 20); f.tc2ValueEdit:SetPoint("LEFT", f.tc2CondButton, "RIGHT", 6, 0)
-    f.tc2ValueEdit:SetAutoFocus(false)
-    f.tc2ValueLabel = dp:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.tc2ValueLabel:SetPoint("LEFT", f.tc2ValueEdit, "RIGHT", 4, 0)
-    f.tc2ValueLabel:SetText("sec")
-
-    -- ======= Sound Effects Section =======
-    local sndSep = dp:CreateTexture(nil, "ARTWORK")
-    sndSep:SetPoint("TOPLEFT", f.tc2ColorLabel, "BOTTOMLEFT", 0, -14)
-    sndSep:SetSize(400, 1); sndSep:SetColorTexture(1, 1, 1, 0.12)
-
-    local sndTitle = dp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    sndTitle:SetPoint("TOPLEFT", sndSep, "BOTTOMLEFT", 0, -6)
-    sndTitle:SetText("|cffffcc00Sound Effects|r")
-
-    -- Shared layout constants for aligned rows
-    local SND_LABEL_W   = 80     -- fixed label column width
-    local SND_DROP_W    = 155    -- dropdown width
-    local SND_ROW_H     = 26    -- row height
-    local SND_LABEL_X   = 0     -- label indent from title
-    local SND_DROP_XOFF = -12   -- dropdown template offset fix
-
-    -- Helper: create one sound row (label + dropdown + optional preview btn)
-    local function CreateSoundRow(parent, labelText, anchorFrame, yOff, globalName, showPreview)
-        -- Row container
-        local row = CreateFrame("Frame", nil, parent)
-        row:SetHeight(SND_ROW_H)
-        row:SetPoint("TOPLEFT", anchorFrame, "BOTTOMLEFT", 0, yOff)
-        row:SetPoint("RIGHT", parent, "RIGHT", -10, 0)
-
-        -- Label (fixed width, right-justified so colons align)
-        local lbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        lbl:SetPoint("LEFT", row, "LEFT", SND_LABEL_X, 0)
-        lbl:SetWidth(SND_LABEL_W)
-        lbl:SetJustifyH("RIGHT")
-        lbl:SetText(labelText)
-
-        -- Dropdown (aligned to fixed column)
-        local drop = CreateFrame("Frame", globalName, row, "UIDropDownMenuTemplate")
-        drop:SetPoint("LEFT", lbl, "RIGHT", SND_DROP_XOFF, -2)
-        if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(drop, SND_DROP_W) end
-
-        -- Preview button
-        local preview = nil
-        if showPreview then
-            preview = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            preview:SetSize(22, 22)
-            preview:SetPoint("LEFT", drop, "RIGHT", -6, 2)
-            preview:SetText("\124TInterface\\Buttons\\UI-SpellbookIcon-NextPage-Up:14:14:0:0\124t")
-            preview:SetScript("OnEnter", function(self)
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:SetText("Preview Sound", 1, 1, 1)
-                GameTooltip:Show()
-            end)
-            preview:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        end
-
-        return row, lbl, drop, preview
-    end
-
-    -- Row 1: On CD Start
-    local sndRow1, _, f_sndStartDrop, f_sndStartPreview = CreateSoundRow(dp, "On CD Start:", sndTitle, -4, "MSWA_SndStartDD", true)
-    f.sndStartDrop    = f_sndStartDrop
-    f.sndStartPreview = f_sndStartPreview
-    f.sndStartPreview:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local db2 = MSWA_GetDB()
-        local ss = (db2.spellSettings or {})[key] or (db2.spellSettings or {})[tostring(key)]
-        local sndKey = ss and ss.soundOnStart
-        if sndKey then MSWA_PlaySound(sndKey, ss.soundChannel) end
-    end)
-
-    -- Row 2: On Ready
-    local sndRow2, _, f_sndReadyDrop, f_sndReadyPreview = CreateSoundRow(dp, "On Ready:", sndRow1, -2, "MSWA_SndReadyDD", true)
-    f.sndReadyDrop    = f_sndReadyDrop
-    f.sndReadyPreview = f_sndReadyPreview
-    f.sndReadyPreview:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local db2 = MSWA_GetDB()
-        local ss = (db2.spellSettings or {})[key] or (db2.spellSettings or {})[tostring(key)]
-        local sndKey = ss and ss.soundOnReady
-        if sndKey then MSWA_PlaySound(sndKey, ss.soundChannel) end
-    end)
-
-    -- Row 3: Channel (no preview)
-    local sndRow3, _, f_sndChannelDrop = CreateSoundRow(dp, "Channel:", sndRow2, -2, "MSWA_SndChannelDD", false)
-    f.sndChannelDrop = f_sndChannelDrop
-
-    -- Initialize sound dropdowns
-    local function InitSoundDropdown(drop, settingsKey)
-        UIDropDownMenu_Initialize(drop, function(self, level)
-            if not level then return end
-            local choices = MSWA_GetSoundChoices()
-            local key = MSWA.selectedSpellID
-            local db2 = MSWA_GetDB()
-            local ss = key and ((db2.spellSettings or {})[key] or (db2.spellSettings or {})[tostring(key)]) or nil
-            local curKey = (ss and ss[settingsKey]) or "NONE"
-            for _, entry in ipairs(choices) do
-                local info = UIDropDownMenu_CreateInfo()
-                info.text = entry.label; info.value = entry.key
-                info.checked = (entry.key == curKey)
-                info.func = function()
-                    local k2 = MSWA.selectedSpellID; if not k2 then return end
-                    local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), k2))
-                    s2[settingsKey] = (entry.key == "NONE") and nil or entry.key
-                    UIDropDownMenu_SetSelectedValue(drop, entry.key)
-                    UIDropDownMenu_SetText(drop, entry.label)
-                    -- Preview: play selected sound immediately
-                    if entry.key ~= "NONE" then
-                        local ch = s2.soundChannel or "Master"
-                        MSWA_PlaySound(entry.key, ch)
-                    end
-                end
-                UIDropDownMenu_AddButton(info, level)
-            end
-        end)
-    end
-    InitSoundDropdown(f.sndStartDrop, "soundOnStart")
-    InitSoundDropdown(f.sndReadyDrop, "soundOnReady")
-
-    -- Channel dropdown init
-    UIDropDownMenu_Initialize(f.sndChannelDrop, function(self, level)
-        if not level then return end
-        local channels = MSWA_GetSoundChannels()
-        local key = MSWA.selectedSpellID
-        local db2 = MSWA_GetDB()
-        local ss = key and ((db2.spellSettings or {})[key] or (db2.spellSettings or {})[tostring(key)]) or nil
-        local curCh = (ss and ss.soundChannel) or "Master"
-        for _, ch in ipairs(channels) do
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = ch.label; info.value = ch.key
-            info.checked = (ch.key == curCh)
-            info.func = function()
-                local k2 = MSWA.selectedSpellID; if not k2 then return end
-                local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), k2))
-                s2.soundChannel = (ch.key == "Master") and nil or ch.key
-                UIDropDownMenu_SetSelectedValue(f.sndChannelDrop, ch.key)
-                UIDropDownMenu_SetText(f.sndChannelDrop, ch.label)
-            end
-            UIDropDownMenu_AddButton(info, level)
-        end
-    end)
-
-    -- Set scroll child height (covers all content so scrollbar appears when needed)
-    dp:SetHeight(1200)
-
-    -- Helper: update condition button text
-    local function UpdateTC2CondText(cond)
-        if not f.tc2CondButton then return end
-        if cond == "TIMER_ABOVE" then
-            f.tc2CondButton:SetText("Timer >= X")
-        else
-            f.tc2CondButton:SetText("Timer <= X")
-        end
-    end
-
-    -- Enable checkbox
-    f.tc2Check:SetScript("OnClick", function(self)
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        s2.textColor2Enabled = self:GetChecked() and true or nil
-        if s2.textColor2Enabled and not s2.textColor2 then
-            s2.textColor2 = { r = 1, g = 0.2, b = 0.2 }
-        end
-        MSWA_RequestUpdateSpells(); MSWA_UpdateDetailPanel()
-    end)
-
-    -- Condition cycle
-    f.tc2CondButton:SetScript("OnClick", function()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local cur = s2.textColor2Cond or "TIMER_BELOW"
-        s2.textColor2Cond = (cur == "TIMER_BELOW") and "TIMER_ABOVE" or "TIMER_BELOW"
-        UpdateTC2CondText(s2.textColor2Cond)
-        MSWA_RequestUpdateSpells()
-    end)
-
-    -- Value edit
-    local function ApplyTC2Value()
-        local key = MSWA.selectedSpellID; if not key then return end
-        local s2 = select(1, MSWA_GetOrCreateSpellSettings(MSWA_GetDB(), key))
-        local v = tonumber(f.tc2ValueEdit:GetText())
-        if v and v >= 0 then s2.textColor2Value = v end
-        MSWA_RequestUpdateSpells()
-    end
-    f.tc2ValueEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); ApplyTC2Value() end)
-    f.tc2ValueEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    f.tc2ValueEdit:SetScript("OnEditFocusLost", function() ApplyTC2Value() end)
-
-    -- Color picker for 2nd color
-    f.tc2ColorBtn:SetScript("OnClick", function()
-        local keyAtOpen = MSWA.selectedSpellID; if not keyAtOpen then return end
-        local db3 = MSWA_GetDB()
-        local ss = keyAtOpen and select(1, MSWA_GetSpellSettings(db3, keyAtOpen)) or nil
-        local tc2 = (ss and ss.textColor2) or { r = 1, g = 0.2, b = 0.2 }
-        local r, g, b = tonumber(tc2.r) or 1, tonumber(tc2.g) or 0.2, tonumber(tc2.b) or 0.2
-        local function ApplyC2(nr, ng, nb)
-            local s3 = keyAtOpen and select(1, MSWA_GetOrCreateSpellSettings(db3, keyAtOpen)) or nil
-            if s3 then s3.textColor2 = s3.textColor2 or {}; s3.textColor2.r = nr; s3.textColor2.g = ng; s3.textColor2.b = nb end
-            if f.tc2ColorSwatch and MSWA_KeyEquals(MSWA.selectedSpellID, keyAtOpen) then f.tc2ColorSwatch:SetColorTexture(nr, ng, nb, 1) end
-            MSWA_RequestUpdateSpells()
-        end
-        if ColorPickerFrame and ColorPickerFrame.SetupColorPickerAndShow then
-            local function OnChanged() local nr, ng, nb = ColorPickerFrame:GetColorRGB(); if type(nr) == "number" then ApplyC2(nr, ng, nb) end end
-            ColorPickerFrame:SetupColorPickerAndShow({ r=r, g=g, b=b, hasOpacity=false, swatchFunc=OnChanged, func=OnChanged, okayFunc=OnChanged, cancelFunc=function(restore) if type(restore) == "table" then ApplyC2(restore.r or r, restore.g or g, restore.b or b) else ApplyC2(r, g, b) end end })
-        elseif ColorPickerFrame then
-            ColorPickerFrame.hasOpacity = false; ColorPickerFrame.previousValues = { r=r, g=g, b=b }
-            ColorPickerFrame.func = function() ApplyC2(ColorPickerFrame:GetColorRGB()) end
-            ColorPickerFrame.cancelFunc = function(prev) if type(prev) == "table" then ApplyC2(prev.r or r, prev.g or g, prev.b or b) else ApplyC2(r, g, b) end end
-            ColorPickerFrame:SetColorRGB(r, g, b); ColorPickerFrame:Show()
-        end
-    end)
-
-    -- Apply logic + hooks (identical to original)
-    local function ApplyDisplay()
-        local key = MSWA.selectedSpellID
-        if not key then return end
-        local db = MSWA_GetDB()
-        db.spellSettings = db.spellSettings or {}
-        local s = db.spellSettings[key] or {}
-
-        local x = tonumber(f.detailX:GetText() or "") or 0
-        local y = tonumber(f.detailY:GetText() or "") or 0
-        local w = tonumber(f.detailW:GetText() or "") or MSWA.ICON_SIZE
-        local h = tonumber(f.detailH:GetText() or "") or MSWA.ICON_SIZE
-
-        if w < 16 then w = 16 end
-        if h < 16 then h = 16 end
-        if w > 128 then w = 128 end
-        if h > 128 then h = 128 end
-
-        s.x = x; s.y = y; s.width = w; s.height = h
-        db.spellSettings[key] = s
-
-        -- Live-apply size instantly to the currently visible icon (no waiting for engine throttle)
-        if MSWA.icons then
-            for i = 1, (MSWA.MAX_ICONS or 0) do
-                local btn = MSWA.icons[i]
-                if btn and btn.spellID and ((MSWA_KeyEquals and MSWA_KeyEquals(btn.spellID, key)) or btn.spellID == key) then
-                    btn:SetSize(w, h)
-                    break
-                end
-            end
-        end
-        if type(MSWA_ReskinMasque) == "function" then MSWA_ReskinMasque() end
-
-        if MSWA_ForceUpdateSpells then MSWA_ForceUpdateSpells() else MSWA_RequestUpdateSpells() end
-    end
-    local function ApplyAnchor() local key = MSWA.selectedSpellID; if not key then return end; local db = MSWA_GetDB(); db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[key] or {}
-        local a = f.detailA:GetText() or ""
-        a = tostring(a):gsub("^%s+", ""):gsub("%s+$", "")
-        if a == "" then a = nil end
-
-        -- If this aura belongs to a group, the group is the master anchor.
-        local gid = (MSWA_GetAuraGroup and MSWA_GetAuraGroup(key)) or nil
-        if gid and db.groups and db.groups[gid] then
-            local g = db.groups[gid]
-            g.anchorFrame = a
-            -- Keep per-aura anchor cleared while grouped (prevents confusion/overrides).
-            s.anchorFrame = nil
-            db.groups[gid] = g
-        else
-            s.anchorFrame = a
-        end
-
-        db.spellSettings[key] = s
-        MSWA_RequestUpdateSpells()
-        MSWA_UpdateDetailPanel()
-    end
-    local function HookBox(box, applyFunc) if not box then return end; box:SetScript("OnEnterPressed", function(self) self:ClearFocus(); applyFunc() end); box:SetScript("OnEditFocusLost", function() applyFunc() end) end
-    HookBox(f.detailX, ApplyDisplay); HookBox(f.detailY, ApplyDisplay); HookBox(f.detailW, ApplyDisplay); HookBox(f.detailH, ApplyDisplay); HookBox(f.detailA, ApplyAnchor)
-
-    -- Live-apply width/height while typing (debounced) for instant feedback
-    local function HookLiveNumeric(box, applyFunc, delay)
-        if not (box and applyFunc) then return end
-        if not (C_Timer and C_Timer.After) then return end
-        local token = 0
-        box:HookScript("OnTextChanged", function(self, userInput)
-            if not userInput then return end
-            if not self:HasFocus() then return end
-            local n = tonumber(self:GetText() or "")
-            if not n then return end
-            token = token + 1
-            local my = token
-            C_Timer.After(delay or 0.12, function()
-                if token ~= my then return end
-                if self._mswaSkipApply then return end
-                applyFunc()
-            end)
-        end)
-    end
-    HookLiveNumeric(f.detailW, ApplyDisplay, 0.14)
-    HookLiveNumeric(f.detailH, ApplyDisplay, 0.14)
-
-
-    -- Text size +/-
-    local function ClampTextSize(v) v = tonumber(v) or 12; if v < 6 then v = 6 end; if v > 48 then v = 48 end; return v end
-    local function ApplyTextSize() local db = MSWA_GetDB(); local key = MSWA.selectedSpellID; local s = key and select(1, MSWA_GetOrCreateSpellSettings(db, key)) or nil
-        local cur = (s and s.textFontSize) or db.textFontSize; local v = ClampTextSize(f.textSizeEdit and f.textSizeEdit:GetText() or cur)
-        if s then s.textFontSize = v else db.textFontSize = v end; if f.textSizeEdit then f.textSizeEdit:SetText(tostring(v)) end; MSWA_InvalidateIconCache()
-    end
-    HookBox(f.textSizeEdit, ApplyTextSize)
-    f.textSizeMinus:SetScript("OnClick", function() local db = MSWA_GetDB(); local key = MSWA.selectedSpellID; local s = key and select(1, MSWA_GetOrCreateSpellSettings(db, key)) or nil
-        local cur = (s and s.textFontSize) or db.textFontSize; local v = ClampTextSize((f.textSizeEdit and f.textSizeEdit:GetText()) or cur) - 1; v = ClampTextSize(v)
-        if s then s.textFontSize = v else db.textFontSize = v end; if f.textSizeEdit then f.textSizeEdit:SetText(tostring(v)) end; MSWA_InvalidateIconCache()
-    end)
-    f.textSizePlus:SetScript("OnClick", function() local db = MSWA_GetDB(); local key = MSWA.selectedSpellID; local s = key and select(1, MSWA_GetOrCreateSpellSettings(db, key)) or nil
-        local cur = (s and s.textFontSize) or db.textFontSize; local v = ClampTextSize((f.textSizeEdit and f.textSizeEdit:GetText()) or cur) + 1; v = ClampTextSize(v)
-        if s then s.textFontSize = v else db.textFontSize = v end; if f.textSizeEdit then f.textSizeEdit:SetText(tostring(v)) end; MSWA_InvalidateIconCache()
-    end)
-
-    -- Text pos dropdown
-    if f.textPosDrop and UIDropDownMenu_Initialize then
-        UIDropDownMenu_SetWidth(f.textPosDrop, 120)
-        UIDropDownMenu_Initialize(f.textPosDrop, function(self, level) local db = MSWA_GetDB(); local key = MSWA.selectedSpellID; local s = key and select(1, MSWA_GetSpellSettings(db, key)) or nil; local cur = (s and s.textPoint) or db.textPoint or "BOTTOMRIGHT"
-            for _, point in ipairs({"BOTTOMRIGHT","BOTTOMLEFT","TOPRIGHT","TOPLEFT","CENTER"}) do
-                local info = UIDropDownMenu_CreateInfo(); info.text = MSWA_GetTextPosLabel(point); info.checked = (tostring(cur) == tostring(point))
-                info.func = function()
-                    if key then
-                        local s2 = select(1, MSWA_GetOrCreateSpellSettings(db, key)); s2.textPoint = point
-                    else
-                        db.textPoint = point
-                    end
-                    UIDropDownMenu_SetText(f.textPosDrop, MSWA_GetTextPosLabel(point)); CloseDropDownMenus(); MSWA_InvalidateIconCache()
-                end
-                UIDropDownMenu_AddButton(info, level)
-            end
-        end)
-    end
-
-    -- Color picker (simplified)
-    f.textColorBtn:SetScript("OnClick", function()
-        local db = MSWA_GetDB(); local keyAtOpen = MSWA.selectedSpellID; local s = keyAtOpen and select(1, MSWA_GetSpellSettings(db, keyAtOpen)) or nil
-        local tc = (s and s.textColor) or db.textColor or { r = 1, g = 1, b = 1 }; local r, g, b = tonumber(tc.r) or 1, tonumber(tc.g) or 1, tonumber(tc.b) or 1
-        local function Apply(nr, ng, nb)
-            local s3 = keyAtOpen and select(1, MSWA_GetOrCreateSpellSettings(db, keyAtOpen)) or nil
-            if s3 then s3.textColor = s3.textColor or {}; s3.textColor.r = nr; s3.textColor.g = ng; s3.textColor.b = nb
-            else db.textColor = db.textColor or {}; db.textColor.r = nr; db.textColor.g = ng; db.textColor.b = nb end
-            if f.textColorSwatch and MSWA_KeyEquals(MSWA.selectedSpellID, keyAtOpen) then f.textColorSwatch:SetColorTexture(nr, ng, nb, 1) end
-            MSWA_InvalidateIconCache()
-        end
-        if ColorPickerFrame and ColorPickerFrame.SetupColorPickerAndShow then
-            local function OnChanged() local nr, ng, nb = ColorPickerFrame:GetColorRGB(); if type(nr) == "number" then Apply(nr, ng, nb) end end
-            ColorPickerFrame:SetupColorPickerAndShow({ r=r, g=g, b=b, hasOpacity=false, swatchFunc=OnChanged, func=OnChanged, okayFunc=OnChanged, cancelFunc=function(restore) if type(restore) == "table" then Apply(restore.r or r, restore.g or g, restore.b or b) else Apply(r, g, b) end end })
-        elseif ColorPickerFrame then
-            ColorPickerFrame.hasOpacity = false; ColorPickerFrame.previousValues = { r=r, g=g, b=b }
-            ColorPickerFrame.func = function() Apply(ColorPickerFrame:GetColorRGB()) end
-            ColorPickerFrame.cancelFunc = function(prev) if type(prev) == "table" then Apply(prev.r or r, prev.g or g, prev.b or b) else Apply(r, g, b) end end
-            ColorPickerFrame:SetColorRGB(r, g, b); ColorPickerFrame:Show()
-        end
-    end)
-
-    -- Button actions
-    f.detailApply:SetScript("OnClick", function() local key = MSWA.selectedSpellID; if not key then return end; local db = MSWA_GetDB(); local s = (db.spellSettings or {})[key] or {}; s.x = nil; s.y = nil; s.anchorFrame = nil; db.spellSettings[key] = s; MSWA_RequestUpdateSpells(); MSWA_UpdateDetailPanel() end)
-
-    -- Rekey handler
-    local function DoRekey()
-        local oldKey = MSWA.selectedSpellID
-        if not oldKey then return end
-        local newID = tonumber(f.rekeyEdit:GetText())
-        if not newID or newID <= 0 then return end
-        f.rekeyEdit:ClearFocus()
-        local ok, result = MSWA_RekeyAura(oldKey, newID)
-        if ok then
-            MSWA_InvalidateIconCache()
-            MSWA_RequestUpdateSpells()
-            MSWA_RefreshOptionsList()
-            MSWA_UpdateDetailPanel()
-        else
-            print("|cffff4444MSA:|r Could not change ID: " .. tostring(result))
-        end
-    end
-    f.rekeyBtn:SetScript("OnClick", DoRekey)
-    f.rekeyEdit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); DoRekey() end)
-    f.rekeyEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    f.detailACD:SetScript("OnClick", function() f.detailA:SetText("CooldownManager"); ApplyAnchor() end)
-    f.detailAMSUF:SetScript("OnClick", function() f.detailA:SetText("MSUF_player"); ApplyAnchor() end)
-    f.detailDefault:SetScript("OnClick", function() local key = MSWA.selectedSpellID; if not key then return end; local db = MSWA_GetDB(); (db.spellSettings or {})[key] = nil; MSWA_RequestUpdateSpells(); MSWA_UpdateDetailPanel() end)
-
-    local function NudgeOffset(axis, delta) local key = MSWA.selectedSpellID; if not key then return end; local db = MSWA_GetDB(); db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[key] or {}
-        if axis == "X" then s.x = (s.x or 0) + delta else s.y = (s.y or 0) + delta end; db.spellSettings[key] = s
-        f.detailX:SetText(("%d"):format(s.x or 0)); f.detailY:SetText(("%d"):format(s.y or 0)); MSWA_RequestUpdateSpells()
-    end
-    f.detailXMinus:SetScript("OnClick", function() NudgeOffset("X", -1) end); f.detailXPlus:SetScript("OnClick", function() NudgeOffset("X", 1) end)
-    f.detailYMinus:SetScript("OnClick", function() NudgeOffset("Y", -1) end); f.detailYPlus:SetScript("OnClick", function() NudgeOffset("Y", 1) end)
-
-    -- ID type dropdown
-    f.idType = "AUTO"
-    UIDropDownMenu_Initialize(f.idTypeDrop, function(self, level) if not level then return end
-        local function AddTitle(text)
-            local info = UIDropDownMenu_CreateInfo()
-            info.isTitle = true; info.notCheckable = true; info.text = text
-            UIDropDownMenu_AddButton(info, level)
-        end
-        local function Add(text, typeKey, tip)
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = text; info.value = typeKey
-            info.func = function() f.idType = typeKey; UIDropDownMenu_SetSelectedValue(f.idTypeDrop, typeKey); UIDropDownMenu_SetText(f.idTypeDrop, text) end
-            info.checked = (f.idType == typeKey)
-            if tip then info.tooltipTitle = text; info.tooltipText = tip; info.tooltipOnButton = true end
-            UIDropDownMenu_AddButton(info, level)
-        end
-        AddTitle("|cff888888- Basic -|r")
-        Add("Auto",           "AUTO",           "Automatically detects spell or item by ID.")
-        Add("Spell Cooldown", "SPELL",          "Track a spell's cooldown timer.")
-        Add("Item Cooldown",  "ITEM",           "Track an item's cooldown\n(trinkets, potions, on-use gear).")
-
-        AddTitle("|cff888888- Buff Aura -|r")
-        Add("|cff55bbffBuff Aura|r",     "BUFF_AURA",      "Track a live buff on the player.\nShows active/absent state.\nIdeal for poisons, enchants, raid buffs.\nSecret-safe for Midnight 12.0.")
-        Add("|cff55bbffItem Buff Aura|r", "ITEM_BUFF_AURA", "Buff Aura linked to an item ID.\nFor item-triggered buffs (flasks, food etc.).")
-
-        AddTitle("|cff888888- Timer Modes -|r")
-        Add("Auto Buff",     "AUTOBUFF",        "Countdown timer after spell cast.\nIcon shows while timer runs, hides when done.")
-        Add("Item Buff",     "ITEMBUFF",         "Countdown timer after item use.\nIcon shows while timer runs, hides when done.")
-        Add("|cff44ffaaBuff \226\134\146 CD|r",  "BUFF_THEN_CD",    "Buff timer first, then shows cooldown.\nFor abilities with a buff phase + cooldown.")
-        Add("|cff44ffaaItem Buff \226\134\146 CD|r", "ITEMBUFF_THEN_CD", "Item buff timer first, then shows cooldown.\nFor items with a buff phase + cooldown.")
-
-        AddTitle("|cff888888- Special -|r")
-        Add("|cffff6644Reminder|r",      "REMINDER_BUFF",   "Alert when buff is MISSING.\nShows custom reminder text when absent.\nGreat for missing poisons, class buffs.")
-        Add("|cffff6644Item Reminder|r", "ITEM_REMINDER",   "Alert when item buff is MISSING.\nFlask/food buff reminders.")
-        Add("Spell Charges", "SPELL_CHARGES",   "Track multiple charges (Chi Torpedo, Roll, etc.).\nShows charge count + recharge cooldown.")
-        Add("Item Charges",  "ITEM_CHARGES",    "Track charges on an item.\nShows remaining charges.")
-    end)
-    UIDropDownMenu_SetSelectedValue(f.idTypeDrop, "AUTO"); UIDropDownMenu_SetText(f.idTypeDrop, "Auto")
-
-    -- Add from UI
-    local function ReplaceDraftWithNewKey(oldKey, newKey) local db = MSWA_GetDB(); db.spellSettings = db.spellSettings or {}; db.trackedSpells = db.trackedSpells or {}
-        if MSWA_IsDraftKey(oldKey) then
-            local s = db.spellSettings[oldKey]; if s then db.spellSettings[oldKey] = nil; if not db.spellSettings[newKey] then db.spellSettings[newKey] = s end end
-            if db.auraGroups and db.auraGroups[oldKey] then if not db.auraGroups[newKey] then db.auraGroups[newKey] = db.auraGroups[oldKey] end; db.auraGroups[oldKey] = nil end
-            if db.customNames and db.customNames[oldKey] then if not db.customNames[newKey] then db.customNames[newKey] = db.customNames[oldKey] end; db.customNames[oldKey] = nil end
-            db.trackedSpells[oldKey] = nil
-        end
-    end
-
-    local function AddFromUI() local text = f.addEdit:GetText(); local id = tonumber(text); if not id then return end
-        local db = MSWA_GetDB(); db.trackedItems = db.trackedItems or {}; db.trackedSpells = db.trackedSpells or {}
-        local mode = f.idType or "AUTO"; local newKey
-        local function IsAlreadySpell(sid) if db.trackedSpells[sid] then return true end; for k, en in pairs(db.trackedSpells) do if en and MSWA_IsSpellInstanceKey(k) and MSWA_KeyToSpellID(k) == sid then return true end end; return false end
-        local function IsAlreadyItem(iid) local bk = ("item:%d"):format(iid); if db.trackedItems[iid] then return true end; for k, en in pairs(db.trackedSpells) do if en and MSWA_IsItemKey(k) and MSWA_KeyToItemID(k) == iid then return true end end; return false end
-        if mode == "ITEM" then
-            if IsAlreadyItem(id) then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end
-        elseif mode == "SPELL" then local name = MSWA_GetSpellName(id); if not name then return end; if IsAlreadySpell(id) then newKey = MSWA_NewSpellInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedSpells[id] = true; newKey = id end
-        elseif mode == "AUTOBUFF" then if IsAlreadySpell(id) then newKey = MSWA_NewSpellInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedSpells[id] = true; newKey = id end; db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}; s.auraMode = "AUTOBUFF"; if not s.autoBuffDuration then s.autoBuffDuration = 10 end; db.spellSettings[newKey] = s
-        elseif mode == "ITEMBUFF" then
-            if IsAlreadyItem(id) then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end
-            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}; s.auraMode = "AUTOBUFF"; if not s.autoBuffDuration then s.autoBuffDuration = 10 end; db.spellSettings[newKey] = s
-        elseif mode == "BUFF_THEN_CD" then if IsAlreadySpell(id) then newKey = MSWA_NewSpellInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedSpells[id] = true; newKey = id end; db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}; s.auraMode = "BUFF_THEN_CD"; if not s.autoBuffDuration then s.autoBuffDuration = 10 end; db.spellSettings[newKey] = s
-        elseif mode == "ITEMBUFF_THEN_CD" then
-            if IsAlreadyItem(id) then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end
-            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}; s.auraMode = "BUFF_THEN_CD"; if not s.autoBuffDuration then s.autoBuffDuration = 10 end; db.spellSettings[newKey] = s
-        elseif mode == "REMINDER_BUFF" then
-            if IsAlreadySpell(id) then newKey = MSWA_NewSpellInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedSpells[id] = true; newKey = id end
-            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}; s.auraMode = "REMINDER_BUFF"; if not s.autoBuffDuration then s.autoBuffDuration = 3600 end; s.reminderText = "MISSING!"; s.reminderTextColor = { r = 1, g = 0.2, b = 0.2 }; db.spellSettings[newKey] = s
-        elseif mode == "ITEM_REMINDER" then
-            if IsAlreadyItem(id) then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end
-            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}; s.auraMode = "REMINDER_BUFF"; if not s.autoBuffDuration then s.autoBuffDuration = 3600 end; s.reminderText = "MISSING!"; s.reminderTextColor = { r = 1, g = 0.2, b = 0.2 }; db.spellSettings[newKey] = s
-        elseif mode == "SPELL_CHARGES" then
-            if IsAlreadySpell(id) then newKey = MSWA_NewSpellInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedSpells[id] = true; newKey = id end
-            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}; s.auraMode = "CHARGES"; if not s.chargeMax then s.chargeMax = 3 end; if not s.chargeDuration then s.chargeDuration = 0 end; db.spellSettings[newKey] = s
-            MSWA._charges = MSWA._charges or {}; MSWA._charges[newKey] = { remaining = s.chargeMax, rechargeStart = 0 }
-        elseif mode == "ITEM_CHARGES" then
-            if IsAlreadyItem(id) then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end
-            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}; s.auraMode = "CHARGES"; if not s.chargeMax then s.chargeMax = 3 end; if not s.chargeDuration then s.chargeDuration = 0 end; db.spellSettings[newKey] = s
-            MSWA._charges = MSWA._charges or {}; MSWA._charges[newKey] = { remaining = s.chargeMax, rechargeStart = 0 }
-        elseif mode == "BUFF_AURA" then
-            if IsAlreadySpell(id) then newKey = MSWA_NewSpellInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedSpells[id] = true; newKey = id end
-            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}
-            s.auraMode = "BUFF_AURA"; s.auraSpellID = id; s.auraUnit = "player"
-            if s.showWhenAbsent == nil then s.showWhenAbsent = false end
-            if s.desaturateOnAbsent == nil then s.desaturateOnAbsent = true end
-            if s.alphaOnAbsent == nil then s.alphaOnAbsent = 0.45 end
-            if s.showStacks == nil then s.showStacks = true end
-            db.spellSettings[newKey] = s
-            if MSWA_RegisterBuffWatch then MSWA_RegisterBuffWatch(tostring(newKey), id, "player") end
-        elseif mode == "ITEM_BUFF_AURA" then
-            if IsAlreadyItem(id) then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end
-            db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[newKey] or {}
-            s.auraMode = "BUFF_AURA"; s.auraSpellID = id; s.auraUnit = "player"
-            if s.showWhenAbsent == nil then s.showWhenAbsent = false end
-            if s.desaturateOnAbsent == nil then s.desaturateOnAbsent = true end
-            if s.alphaOnAbsent == nil then s.alphaOnAbsent = 0.45 end
-            if s.showStacks == nil then s.showStacks = true end
-            db.spellSettings[newKey] = s
-            if MSWA_RegisterBuffWatch then MSWA_RegisterBuffWatch(tostring(newKey), id, "player") end
-        else local name = MSWA_GetSpellName(id); if name then if IsAlreadySpell(id) then newKey = MSWA_NewSpellInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedSpells[id] = true; newKey = id end else if IsAlreadyItem(id) then newKey = MSWA_NewItemInstanceKey(id); db.trackedSpells[newKey] = true else db.trackedItems[id] = true; newKey = ("item:%d"):format(id) end end end
-        local oldKey = MSWA.selectedSpellID; if oldKey and MSWA_IsDraftKey(oldKey) and newKey then ReplaceDraftWithNewKey(oldKey, newKey) end
-        MSWA.selectedSpellID = newKey; f.addEdit:SetText(""); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
-    end
-    f.addButton:SetScript("OnClick", AddFromUI); f.addEdit:SetScript("OnEnterPressed", AddFromUI); f.addEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    -- Drag & drop from Spellbook / Inventory ----------------------------------
-    -- GetCursorInfo() returns in WoW 12.0 Midnight:
-    --   spell:  "spell", bookSlotIndex, bookType, spellID
-    --   item:   "item",  itemID,        itemLink
-    --   macro:  "macro", macroIndex
-    -- NOTE: For spells the FIRST number (id) is the book-slot index, NOT the
-    --        spell ID.  The actual spell ID lives in the 4th return (extra).
-    --        We resolve through C_Spell.GetSpellInfo which accepts both ID
-    --        and spell name, exactly like AceGUI / BetterCooldownManager do.
-
-    local function ResolveSpellIDFromCursor(id, info, extra)
-        -- Try extra first (spellID in 12.0)
-        if extra then
-            local data = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(extra)
-            if data and data.spellID then return data.spellID, data.name end
-        end
-        -- Try id (may be spellID in some API versions)
-        if id then
-            local data = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(id)
-            if data and data.spellID then return data.spellID, data.name end
-        end
-        -- Try id as name string (spell dragged by name)
-        if id and type(id) == "string" then
-            local data = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(id)
-            if data and data.spellID then return data.spellID, data.name end
-        end
-        return nil, nil
-    end
-
-    local function ResolveItemIDFromCursor(id, info)
-        -- id = itemID for item drags
-        local itemID = tonumber(id)
-        if itemID and itemID > 0 then return itemID end
-        -- Fallback: parse from itemLink in info
-        if type(info) == "string" then
-            local parsed = info:match("item:(%d+)")
-            if parsed then return tonumber(parsed) end
-        end
-        return nil
-    end
-
-    local function HandleCursorDrop()
-        if not GetCursorInfo then return false end
-        local cursorType, id, info, extra = GetCursorInfo()
-        if not cursorType then return false end
-
-        local numericID
-        if cursorType == "spell" then
-            local spellID, spellName = ResolveSpellIDFromCursor(id, info, extra)
-            if not spellID then ClearCursor(); return false end
-            numericID = spellID
-            f.idType = "SPELL"
-            if UIDropDownMenu_SetSelectedValue then UIDropDownMenu_SetSelectedValue(f.idTypeDrop, "SPELL") end
-            if UIDropDownMenu_SetText then UIDropDownMenu_SetText(f.idTypeDrop, "Spell") end
-
-        elseif cursorType == "item" then
-            local itemID = ResolveItemIDFromCursor(id, info)
-            if not itemID then ClearCursor(); return false end
-            numericID = itemID
-            f.idType = "ITEM"
-            if UIDropDownMenu_SetSelectedValue then UIDropDownMenu_SetSelectedValue(f.idTypeDrop, "ITEM") end
-            if UIDropDownMenu_SetText then UIDropDownMenu_SetText(f.idTypeDrop, "Item") end
-
-        elseif cursorType == "macro" then
-            -- Macro drag: try to resolve spell inside the macro (best effort)
-            ClearCursor(); return false
-        else
-            ClearCursor(); return false
-        end
-
-        f.addEdit:SetText(tostring(numericID))
-        ClearCursor()
-        AddFromUI()
-        return true
-    end
-
-    -- addEdit receives drag (like AceGUI EditBox)
-    f.addEdit:SetScript("OnReceiveDrag", function() HandleCursorDrop() end)
-    f.addEdit:HookScript("OnMouseDown", function(self, button)
-        if button == "LeftButton" and GetCursorInfo and GetCursorInfo() then HandleCursorDrop() end
-    end)
-
-    -- dropZone receives drag
-    f.dropZone:SetScript("OnReceiveDrag", function() HandleCursorDrop() end)
-    f.dropZone:SetScript("OnClick", function(self, button)
-        if button == "LeftButton" and GetCursorInfo and GetCursorInfo() then HandleCursorDrop() end
-    end)
-    f.dropZone:RegisterForClicks("LeftButtonUp")
-
-    -- dropZone hover highlight
-    f.dropZone:SetScript("OnEnter", function(self)
-        local hasCursor = GetCursorInfo and GetCursorInfo()
-        if hasCursor then
-            self.bg:SetColorTexture(0.15, 0.25, 0.15, 0.8)
-            self.border:SetBackdropBorderColor(0.3, 0.9, 0.3, 1)
-            self.label:SetText("|cff44ff44Release to add aura|r")
-            self.icon:SetDesaturated(false)
-            self.icon:SetVertexColor(0.4, 1, 0.4)
-        else
-            self.bg:SetColorTexture(0.18, 0.18, 0.18, 0.8)
-            self.border:SetBackdropBorderColor(0.7, 0.7, 0.7, 1)
-            self.label:SetText("|cffbbbbbbDrop Spell or Item here|r")
-            self.icon:SetDesaturated(true)
-            self.icon:SetVertexColor(0.85, 0.85, 0.85)
-        end
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:AddLine("Drag & Drop", 1, 0.82, 0)
-        GameTooltip:AddLine("Drag a spell from your Spellbook or", 1, 1, 1)
-        GameTooltip:AddLine("an item from your Bags to add it.", 1, 1, 1)
-        GameTooltip:Show()
-    end)
-    f.dropZone:SetScript("OnLeave", function(self)
-        self.bg:SetColorTexture(0.12, 0.12, 0.12, 0.7)
-        self.border:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
-        self.label:SetText("|cff888888Drop Spell or Item here|r")
-        self.icon:SetDesaturated(true)
-        self.icon:SetVertexColor(0.7, 0.7, 0.7)
-        GameTooltip:Hide()
-    end)
-
-    -- Top button scripts
+    f.btnIDInfo:SetPoint("LEFT", f.btnPreview, "RIGHT", 4, 0)
+
+    local statusText = bottomBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    statusText:SetPoint("RIGHT", bottomBar, "RIGHT", -8, 0); W.SkinMuted(statusText)
+    f._statusText = statusText
+
+    -- ════════════════════════════════════════════════════
+    -- TOP BUTTON SCRIPTS
+    -- ════════════════════════════════════════════════════
     f.btnNew:SetScript("OnClick", function(self)
         if not MenuUtil or not MenuUtil.CreateContextMenu then
-            -- Fallback: simple new draft
-            local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}; local dk = MSWA_NewDraftKey(); db.trackedSpells[dk] = true; MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SetActiveTab("GENERAL"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList(); if f.addEdit then f.addEdit:SetFocus(); f.addEdit:HighlightText() end
+            local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}; local dk = MSWA_NewDraftKey(); db.trackedSpells[dk] = true
+            MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SwitchPage("trigger"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
             return
         end
-        MenuUtil.CreateContextMenu(self, function(ownerRegion, rootDescription)
+        MenuUtil.CreateContextMenu(self, function(_, rootDescription)
             rootDescription:CreateTitle("New Aura")
             rootDescription:CreateButton("Cooldown", function()
-                local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}; local dk = MSWA_NewDraftKey(); db.trackedSpells[dk] = true; MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SetActiveTab("GENERAL"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList(); if f.addEdit then f.addEdit:SetFocus(); f.addEdit:HighlightText() end
+                local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}; local dk = MSWA_NewDraftKey(); db.trackedSpells[dk] = true
+                MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SwitchPage("trigger"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
             end)
             rootDescription:CreateButton("Buff Aura", function()
                 local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}; local dk = MSWA_NewDraftKey(); db.trackedSpells[dk] = true
-                db.spellSettings = db.spellSettings or {}; local s = db.spellSettings[dk] or {}
+                db.spellSettings = db.spellSettings or {}; local s = {}
                 s.auraMode = "BUFF_AURA"; s.auraUnit = "player"; s.showWhenAbsent = false; s.desaturateOnAbsent = true; s.alphaOnAbsent = 0.45; s.showStacks = true
                 db.spellSettings[dk] = s
-                MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SetActiveTab("GENERAL"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList(); if f.addEdit then f.addEdit:SetFocus(); f.addEdit:HighlightText() end
+                MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SwitchPage("trigger"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
             end)
             rootDescription:CreateButton("From Template...", function()
                 if MSWA_ToggleTemplateBrowser then MSWA_ToggleTemplateBrowser() end
             end)
         end)
     end)
-    f.btnGroup:SetScript("OnClick", function() local gid = MSWA_CreateGroup(nil); MSWA.selectedSpellID = nil; MSWA.selectedGroupID = gid; MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList() end)
-    f.btnPreview:SetScript("OnClick", function()
-        MSWA.previewMode = not MSWA.previewMode
-        if MSWA.previewMode then f.btnPreview:SetText("|cff00ff00Preview|r"); MSWA_Print("Preview ON") else f.btnPreview:SetText("Preview"); MSWA_Print("Preview OFF.") end
-        MSWA_RequestUpdateSpells()
-    end)
-
-    local function SyncIDInfoBtn()
-        local db = MSWA_GetDB()
-        if db.showSpellID or db.showIconID then
-            f.btnIDInfo:SetText("|cff00ff00ID Info|r")
-        else
-            f.btnIDInfo:SetText("ID Info")
-        end
-    end
-    f.btnIDInfo:SetScript("OnClick", function(self, button)
-        local db = MSWA_GetDB()
-        if button == "RightButton" then
-            -- Right-click: cycle modes (Both -> Spell only -> Icon only -> Off)
-            if db.showSpellID and db.showIconID then
-                db.showSpellID = true; db.showIconID = false
-                MSWA_Print("Tooltip: Spell/Item ID only")
-            elseif db.showSpellID and not db.showIconID then
-                db.showSpellID = false; db.showIconID = true
-                MSWA_Print("Tooltip: Icon ID only")
-            elseif not db.showSpellID and db.showIconID then
-                db.showSpellID = false; db.showIconID = false
-                MSWA_Print("Tooltip: ID Info OFF")
-            else
-                db.showSpellID = true; db.showIconID = true
-                MSWA_Print("Tooltip: Spell/Item ID + Icon ID")
-            end
-        else
-            -- Left-click: simple toggle both
-            local on = not (db.showSpellID or db.showIconID)
-            db.showSpellID = on; db.showIconID = on
-            if on then MSWA_Print("Tooltip ID Info ON") else MSWA_Print("Tooltip ID Info OFF") end
-        end
-        SyncIDInfoBtn()
-    end)
-    f.btnIDInfo:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    f.btnIDInfo:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-        GameTooltip:AddLine("ID Info", 1, 0.82, 0)
-        GameTooltip:AddLine("Left-click: toggle on/off", 1, 1, 1)
-        GameTooltip:AddLine("Right-click: cycle modes", 0.7, 0.7, 0.7)
-        local db = MSWA_GetDB()
-        local status = "Off"
-        if db.showSpellID and db.showIconID then status = "Spell + Icon ID"
-        elseif db.showSpellID then status = "Spell/Item ID only"
-        elseif db.showIconID then status = "Icon ID only" end
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("Current: |cffffffff" .. status .. "|r", 1, 0.82, 0)
-        GameTooltip:Show()
-    end)
-    f.btnIDInfo:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    SyncIDInfoBtn()
     f.btnImport:SetScript("OnClick", function() MSWA_OpenImportFrame() end)
     f.btnExport:SetScript("OnClick", function()
         if MSWA.selectedGroupID then MSWA_ExportGroup(MSWA.selectedGroupID); return end
         local key = MSWA.selectedSpellID; if not key then MSWA_Print("Select an aura or group to export."); return end
-        local db = MSWA_GetDB(); local gid = db.auraGroups and (db.auraGroups[key] or db.auraGroups[tostring(key)])
-        if gid and db.groups and db.groups[gid] then MSWA_ExportGroup(gid); return end
         MSWA_ExportAura(key)
     end)
+    f.btnGroup:SetScript("OnClick", function()
+        local gid = MSWA_CreateGroup(nil); MSWA.selectedSpellID = nil; MSWA.selectedGroupID = gid
+        MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
+    end)
 
+    -- ════════════════════════════════════════════════════
     -- OnShow / OnHide / OnSizeChanged
+    -- ════════════════════════════════════════════════════
     f:SetScript("OnSizeChanged", function(self)
-        if self:IsShown() and self.UpdateAuraList then
-            self:UpdateAuraList()
-        end
+        if self:IsShown() and self.UpdateAuraList then self:UpdateAuraList() end
     end)
     f:SetScript("OnShow", function()
         MSWA.selectedSpellID = nil; MSWA.selectedGroupID = nil; MSWA.previewMode = false
         if f.btnPreview then f.btnPreview:SetText("Preview") end
-        SyncIDInfoBtn()
-        f.activeTab = "GENERAL"
-        if f.tabGeneral then f.tabGeneral:LockHighlight() end; if f.tabDisplay then f.tabDisplay:UnlockHighlight() end; if f.tabGlow then f.tabGlow:UnlockHighlight() end; if f.tabImport then f.tabImport:UnlockHighlight() end
-        f:UpdateAuraList(); MSWA_ApplyUIFont()
+        _currentPageKey = "trigger"; SwitchPage("trigger")
+        f:UpdateAuraList(); MSWA_RebuildFontChoices()
     end)
     f:SetScript("OnHide", function()
         MSWA.selectedSpellID = nil; MSWA.selectedGroupID = nil
         if MSWA.previewMode then MSWA.previewMode = false; if f.btnPreview then f.btnPreview:SetText("Preview") end; MSWA_RequestUpdateSpells() end
     end)
 
-    f:Hide(); MSWA.optionsFrame = f
-    MSWA_RebuildFontChoices(); MSWA_InitFontDropdown(); MSWA_ApplyUIFont()
+    f:Hide(); MSWA.optionsFrame = f; MSWA_RebuildFontChoices()
     f:UpdateAuraList()
     return f
 end
@@ -4819,15 +1673,10 @@ end
 -----------------------------------------------------------
 -- Toggle options
 -----------------------------------------------------------
-
 function MSWA_ToggleOptions()
     local f = MSWA.optionsFrame or MSWA_CreateOptionsFrame()
-    if f:IsShown() then f:Hide() else MSWA_RefreshOptionsList(); MSWA_ApplyUIFont(); f:Show() end
+    if f:IsShown() then f:Hide() else MSWA_RefreshOptionsList(); f:Show() end
 end
-
------------------------------------------------------------
--- Slash commands
------------------------------------------------------------
 
 SLASH_MIDNIGHTSIMPLEWEAKAURAS1 = "/msa"
 SLASH_MIDNIGHTSIMPLEWEAKAURAS2 = "/ms"
