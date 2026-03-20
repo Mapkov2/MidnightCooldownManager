@@ -519,9 +519,9 @@ btn.spellID = nil
             end
 
             if MSWA.optionsFrame and MSWA.optionsFrame:IsShown() and MSWA.selectedSpellID == key then
-                MSWA.optionsFrame.detailX:SetText(("%d"):format(settings.x or 0))
-                MSWA.optionsFrame.detailY:SetText(("%d"):format(settings.y or 0))
-                MSWA.optionsFrame.detailA:SetText(settings.anchorFrame or "")
+                if MSWA.optionsFrame.detailX then MSWA.optionsFrame.detailX:SetText(("%d"):format(settings.x or 0)) end
+                if MSWA.optionsFrame.detailY then MSWA.optionsFrame.detailY:SetText(("%d"):format(settings.y or 0)) end
+                if MSWA.optionsFrame.detailA then MSWA.optionsFrame.detailA:SetText(settings.anchorFrame or "") end
             end
         else
             MSWA_StopDragging()

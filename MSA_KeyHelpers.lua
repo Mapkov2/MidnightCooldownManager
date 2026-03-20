@@ -88,6 +88,29 @@ function MSWA_IsSpellKey(key)
 end
 
 -----------------------------------------------------------
+-- Trinket key checks
+-----------------------------------------------------------
+
+function MSWA_IsTrinketKey(key)
+    return key == "trinket:13" or key == "trinket:14"
+end
+
+function MSWA_KeyToTrinketSlot(key)
+    if key == "trinket:13" then return 13 end
+    if key == "trinket:14" then return 14 end
+    return nil
+end
+
+--- Returns the equipped item ID for a trinket slot, or nil
+function MSWA_GetTrinketItemID(slot)
+    if not slot then return nil end
+    if GetInventoryItemID then
+        return GetInventoryItemID("player", slot)
+    end
+    return nil
+end
+
+-----------------------------------------------------------
 -- Auto Buff check
 -----------------------------------------------------------
 
@@ -116,7 +139,15 @@ function MSWA_GetDisplayNameForKey(key)
     if db.customNames and db.customNames[key] and db.customNames[key] ~= "" then
         return db.customNames[key]
     end
-    if MSWA_IsDraftKey(key) then
+    if MSWA_IsTrinketKey(key) then
+        local slot = MSWA_KeyToTrinketSlot(key)
+        local itemID = MSWA_GetTrinketItemID(slot)
+        if itemID and GetItemInfo then
+            local name = GetItemInfo(itemID)
+            if name then return name end
+        end
+        return slot == 13 and "Trinket 1 (Slot 13)" or "Trinket 2 (Slot 14)"
+    elseif MSWA_IsDraftKey(key) then
         return "???"
     elseif MSWA_IsItemInstanceKey(key) then
         local itemID = MSWA_KeyToItemID(key)
@@ -151,7 +182,14 @@ function MSWA_GetIconForKey(key)
         if cid and cid > 0 then return cid end
     end
 
-    if MSWA_IsDraftKey(key) then
+    if MSWA_IsTrinketKey(key) then
+        local slot = MSWA_KeyToTrinketSlot(key)
+        if slot and GetInventoryItemTexture then
+            local tex = GetInventoryItemTexture("player", slot)
+            if tex then return tex end
+        end
+        return 136243
+    elseif MSWA_IsDraftKey(key) then
         return DRAFT_ICON
     elseif MSWA_IsItemKey(key) then
         -- Handles both item:123 and item:123:N
@@ -320,3 +358,6 @@ _G.MSWA_ResolveSpellSettingsKey = MSWA_ResolveSpellSettingsKey
 _G.MSWA_IsItemInstanceKey = MSWA_IsItemInstanceKey
 _G.MSWA_NewItemInstanceKey = MSWA_NewItemInstanceKey
 _G.MSWA_IsBuffThenCD = MSWA_IsBuffThenCD
+_G.MSWA_IsTrinketKey = MSWA_IsTrinketKey
+_G.MSWA_KeyToTrinketSlot = MSWA_KeyToTrinketSlot
+_G.MSWA_GetTrinketItemID = MSWA_GetTrinketItemID

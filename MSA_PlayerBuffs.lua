@@ -1,43 +1,16 @@
 -- ########################################################
--- MSA_PlayerBuffs.lua  (v3 - minimal event relay)
+-- MSA_PlayerBuffs.lua  (v5 - stubs only)
 --
--- Buff tracking is done DIRECTLY in UpdateEngine hot-path
--- via C_UnitAuras.GetAuraDataBySpellID() - like WeakAuras.
+-- All buff tracking events and cache logic have been moved
+-- to MSA_BuffBridge.lua (event-driven architecture).
 --
--- This file only provides:
---   1) UNIT_AURA event relay -> triggers UpdateEngine redraw
+-- This file retains only:
+--   1) Stub functions referenced by Options/legacy code
 --   2) Legacy compat: ns.PlayerBuffs.UpdateIcon
---   3) Stub functions so Options code doesn't error
---
--- Zero pcall. Zero state. Zero registration.
 -- ########################################################
 
 local ADDON_NAME, ns = ...
 local type = type
-
------------------------------------------------------------
--- Event relay: UNIT_AURA on player -> trigger redraw
------------------------------------------------------------
-
-local relay = CreateFrame("Frame", "MSWA_BuffEventFrame", UIParent)
-relay:RegisterEvent("UNIT_AURA")
-relay:RegisterEvent("PLAYER_ENTERING_WORLD")
-
-relay:SetScript("OnEvent", function(_, event, arg1)
-    if event == "UNIT_AURA" then
-        if arg1 == "player" then
-            -- Invalidate per-frame cache so next poll gets fresh data
-            if MSWA_InvalidateBuffCache then MSWA_InvalidateBuffCache() end
-            if MSWA_RequestUpdateSpells then MSWA_RequestUpdateSpells() end
-        end
-        return
-    end
-    -- PLAYER_ENTERING_WORLD: trigger initial draw
-    if MSWA_InvalidateBuffCache then MSWA_InvalidateBuffCache() end
-    if MSWA_RequestUpdateSpells then
-        MSWA_RequestUpdateSpells()
-    end
-end)
 
 -----------------------------------------------------------
 -- Stub functions (Options code references these)
@@ -70,21 +43,10 @@ function PB.UpdateIcon(iconFrame, spellID)
             if sText then target:SetText(sText); target:Show()
             else target:SetText(""); target:Hide() end
         end
-        -- Cooldown: EQoL issecretvalue pattern
+        -- Cooldown: secret-safe via BuffBridge
         local cd = iconFrame.cooldown
         if cd then
-            local dur = auraData.duration
-            local exp = auraData.expirationTime
-            local isSecret = MSWA_IsSecretValue(dur) or MSWA_IsSecretValue(exp)
-            if isSecret and cd.SetCooldownFromExpirationTime then
-                cd:SetCooldownFromExpirationTime(exp, dur, auraData.timeMod)
-                cd.__mswaSet = true
-            elseif dur and dur > 0 and exp then
-                cd:SetCooldown(exp - dur, dur)
-                cd.__mswaSet = true
-            else
-                MSWA_ClearCooldownFrame(cd)
-            end
+            MSWA_ApplyAuraCooldown(cd, auraData)
         end
     else
         iconFrame.icon:SetDesaturated(true)

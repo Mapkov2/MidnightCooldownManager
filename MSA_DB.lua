@@ -73,6 +73,11 @@ function MSWA_GetDB()
     db.auraGroups    = db.auraGroups or {}
     db.customNames   = db.customNames or {}
 
+    -- Blizzard Cooldown Viewer visibility integration
+    db.cooldownViewerVisibility = db.cooldownViewerVisibility or {}
+    if db.cooldownViewerFadeAmount == nil then db.cooldownViewerFadeAmount = 1 end -- 1 = 100% faded/hidden
+    if db.cooldownViewerSharedMouseover == nil then db.cooldownViewerSharedMouseover = false end
+
     if db.textFontSize == nil then db.textFontSize = 12 end
     -- Global font defaults (used when an aura has no per-aura override)
     if db.fontKey == nil then db.fontKey = "DEFAULT" end

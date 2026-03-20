@@ -51,6 +51,38 @@ local function LeftJustify(btn, pad)
     fs:SetPoint("RIGHT", btn, "RIGHT", -8, 0)
 end
 
+local function ApplyReadableFont(fs, sizeDelta, forceFlags)
+    if not fs then return end
+    local ok, font, size, flags = pcall(fs.GetFont, fs)
+    if ok and font and size then
+        local baseFont = fs._MSWAReadableBaseFont or font
+        local baseSize = fs._MSWAReadableBaseSize
+        local baseFlags = fs._MSWAReadableBaseFlags
+
+        if not baseSize then
+            baseSize = size or 12
+            baseFlags = flags or ""
+            fs._MSWAReadableBaseFont = baseFont
+            fs._MSWAReadableBaseSize = baseSize
+            fs._MSWAReadableBaseFlags = baseFlags
+        end
+
+        local delta = sizeDelta or 0
+        local targetSize = math_max(8, math_floor((baseSize or 12) + delta + 0.5))
+        local targetFlags = forceFlags or baseFlags or ""
+
+        if fs._MSWAReadableAppliedSize ~= targetSize or fs._MSWAReadableAppliedFont ~= baseFont or fs._MSWAReadableAppliedFlags ~= targetFlags then
+            fs:SetFont(baseFont, targetSize, targetFlags)
+            fs._MSWAReadableAppliedFont = baseFont
+            fs._MSWAReadableAppliedSize = targetSize
+            fs._MSWAReadableAppliedFlags = targetFlags
+        end
+    end
+    if fs.SetShadowColor then fs:SetShadowColor(0, 0, 0, 0.95) end
+    if fs.SetShadowOffset then fs:SetShadowOffset(1, -1) end
+end
+W.ApplyReadableFont = ApplyReadableFont
+
 -- ════════════════════════════════════════════════════════
 -- SUPERELLIPSE (3-part pill shape, MSUF implementation)
 -- ════════════════════════════════════════════════════════
@@ -129,9 +161,9 @@ end
 -- TEXT HELPERS
 -- ════════════════════════════════════════════════════════
 
-function W.SkinTitle(fs) if fs then fs:SetTextColor(T.titleR, T.titleG, T.titleB, T.titleA) end end
-function W.SkinText(fs)  if fs then fs:SetTextColor(T.textR, T.textG, T.textB, T.textA) end end
-function W.SkinMuted(fs) if fs then fs:SetTextColor(T.mutedR, T.mutedG, T.mutedB, T.mutedA) end end
+function W.SkinTitle(fs) if fs then fs:SetTextColor(T.titleR, T.titleG, T.titleB, T.titleA); ApplyReadableFont(fs, 1) end end
+function W.SkinText(fs)  if fs then fs:SetTextColor(T.textR, T.textG, T.textB, T.textA); ApplyReadableFont(fs, 1) end end
+function W.SkinMuted(fs) if fs then fs:SetTextColor(T.mutedR, T.mutedG, T.mutedB, T.mutedA); ApplyReadableFont(fs, 1) end end
 
 function W.Title(parent, text, x, y)
     local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -214,7 +246,7 @@ function W.Button(parent, text, w, h, onClick, tipTitle, tipBody)
     btn._fill = fill; btn._border = border
 
     local fs = btn:GetFontString()
-    if fs then fs:SetTextColor(T.textR, T.textG, T.textB, T.textA) end
+    if fs then fs:SetTextColor(T.textR, T.textG, T.textB, T.textA); ApplyReadableFont(fs, 1) end
 
     btn:SetScript("OnEnter", function(self)
         if self._fill then self._fill:SetVertexColor(0.10, 0.15, 0.25, 0.98) end
@@ -264,7 +296,7 @@ function W.NavButton(parent, text, w, h, isChild, onClick)
     btn._active = active
 
     local fs = btn:GetFontString()
-    if fs then fs:SetTextColor(isChild and 0.80 or 0.82, isChild and 0.88 or 0.90, 1.00, isChild and 0.92 or 1.00) end
+    if fs then fs:SetTextColor(isChild and 0.80 or 0.82, isChild and 0.88 or 0.90, 1.00, isChild and 0.92 or 1.00); ApplyReadableFont(fs, 1) end
 
     function btn:SetActive(val)
         self._isActive = val
@@ -273,12 +305,12 @@ function W.NavButton(parent, text, w, h, isChild, onClick)
             for _, p in ipairs(self._active._parts) do p:Show() end
             self._fill:SetVertexColor(0.12, 0.22, 0.40, 0.98)
             self._border:SetVertexColor(T.accentR, T.accentG, T.accentB, 1)
-            if fs2 then fs2:SetTextColor(0.92, 0.96, 1.00, 1.00) end
+            if fs2 then fs2:SetTextColor(0.92, 0.96, 1.00, 1.00); ApplyReadableFont(fs2, 1) end
         else
             for _, p in ipairs(self._active._parts) do p:Hide() end
             self._fill:SetVertexColor(0.09, 0.10, 0.12, isChild and 0.82 or 0.92)
             self._border:SetVertexColor(pillEdgeR, pillEdgeG, pillEdgeB, 0.80)
-            if fs2 then fs2:SetTextColor(isChild and 0.80 or 0.82, isChild and 0.88 or 0.90, 1.00, isChild and 0.92 or 1.00) end
+            if fs2 then fs2:SetTextColor(isChild and 0.80 or 0.82, isChild and 0.88 or 0.90, 1.00, isChild and 0.92 or 1.00); ApplyReadableFont(fs2, 1) end
         end
     end
 
@@ -359,7 +391,7 @@ function W.EditBox(parent, w, h, numeric)
     local eb = CreateFrame("EditBox", nil, parent, "BackdropTemplate")
     eb:SetSize(w or 80, h or 22); eb:SetAutoFocus(false)
     if numeric then eb:SetNumeric(true) end
-    eb:SetMaxLetters(64); eb:SetFontObject("GameFontHighlightSmall"); eb:SetJustifyH("LEFT")
+    eb:SetMaxLetters(64); eb:SetFontObject("GameFontHighlightSmall"); eb:SetJustifyH("LEFT"); ApplyReadableFont(eb, 1)
     eb:EnableMouse(true)
     eb:SetBackdrop({
         bgFile = "Interface/Buttons/WHITE8X8", edgeFile = "Interface/Buttons/WHITE8X8",
@@ -399,7 +431,7 @@ function W.Slider(parent, label, min, max, step, getValue, setValue, tipTitle, t
     local ib = CreateFrame("EditBox", nil, container, "BackdropTemplate")
     ib:SetSize(48, 18); ib:SetPoint("LEFT", slider, "RIGHT", 8, 0)
     ib:SetAutoFocus(false); ib:SetNumeric(false); ib:SetMaxLetters(6)
-    ib:SetFontObject("GameFontHighlightSmall"); ib:SetJustifyH("CENTER"); ib:EnableMouse(true)
+    ib:SetFontObject("GameFontHighlightSmall"); ib:SetJustifyH("CENTER"); ib:EnableMouse(true); ApplyReadableFont(ib, 1)
     ib:SetBackdrop({ bgFile="Interface/Buttons/WHITE8X8", edgeFile="Interface/Buttons/WHITE8X8", edgeSize=1, insets={left=1,right=1,top=1,bottom=1} })
     ib:SetBackdropColor(0.06, 0.08, 0.14, 0.95); ib:SetBackdropBorderColor(T.edgeR, T.edgeG, T.edgeB, 0.7)
     ib:SetTextColor(T.textR, T.textG, T.textB, T.textA)
@@ -526,7 +558,7 @@ function W.Dropdown(parent, label, w, getOptions, getValue, setValue, tipTitle)
             local row = container._listRows[i]
             if not row then
                 row = CreateFrame("Frame", nil, ct); row:SetHeight(rowH); row:EnableMouse(true)
-                row.text = row:CreateFontString(nil, "OVERLAY"); row.text:SetFont(STANDARD_TEXT_FONT, 11, "")
+                row.text = row:CreateFontString(nil, "OVERLAY"); row.text:SetFont(STANDARD_TEXT_FONT, 12, "")
                 row.text:SetPoint("LEFT", 8, 0); row.text:SetPoint("RIGHT", -8, 0); row.text:SetJustifyH("LEFT")
                 row.sel = row:CreateTexture(nil, "BACKGROUND"); row.sel:SetAllPoints(); row.sel:SetColorTexture(T.accentR, T.accentG, T.accentB, 0.3)
                 row.hov = row:CreateTexture(nil, "BACKGROUND", nil, 1); row.hov:SetAllPoints(); row.hov:SetColorTexture(1,1,1,0)

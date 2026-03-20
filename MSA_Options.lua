@@ -19,6 +19,23 @@ function MSWA_ShowListContextMenu(row)
     -- Modern Midnight 12.0 menu API (MenuUtil.CreateContextMenu)
     if not MenuUtil or not MenuUtil.CreateContextMenu then return end
 
+    local function MoveAuraToGroupEnd(key, gid)
+        if type(MSWA_MoveAuraToGroupPosition) == "function" then
+            if gid and db.groups and db.groups[gid] then
+                local members = type(MSWA_EnsureGroupMembers) == "function" and MSWA_EnsureGroupMembers(gid) or nil
+                local insertIndex = (type(members) == "table") and (#members + 1) or 1
+                MSWA_MoveAuraToGroupPosition(key, gid, insertIndex)
+            else
+                MSWA_MoveAuraToGroupPosition(key, nil, nil)
+            end
+        else
+            MSWA_SetAuraGroup(key, gid)
+            if type(MSWA_RequestFullRefresh) == "function" then
+                MSWA_RequestFullRefresh()
+            end
+        end
+    end
+
     -- Count multi-selected auras
     local multiSel = MSWA._multiSelect or {}
     local multiCount = 0
@@ -101,6 +118,38 @@ function MSWA_ShowListContextMenu(row)
                     MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
                 end)
                 if not canDown then btnDown:SetEnabled(false) end
+            end
+
+            local moveMenu = rootDescription:CreateButton("Move to Group")
+            if moveMenu then
+                if gid then
+                    moveMenu:CreateButton("Remove from Group", function()
+                        MoveAuraToGroupEnd(key, nil)
+                    end)
+                    if moveMenu.CreateDivider then moveMenu:CreateDivider() end
+                else
+                    local currentRow = moveMenu:CreateButton("Already ungrouped")
+                    if currentRow and currentRow.SetEnabled then currentRow:SetEnabled(false) end
+                    if moveMenu.CreateDivider then moveMenu:CreateDivider() end
+                end
+
+                local foundGroup = false
+                if db.groupOrder and db.groups then
+                    for _, moveGid in ipairs(db.groupOrder) do
+                        local moveGroup = db.groups[moveGid]
+                        if moveGroup then
+                            foundGroup = true
+                            local prefix = (moveGid == gid) and "|cff44dd44✓ |r" or ""
+                            moveMenu:CreateButton(prefix .. (moveGroup.name or tostring(moveGid)), function()
+                                MoveAuraToGroupEnd(key, moveGid)
+                            end)
+                        end
+                    end
+                end
+                if not foundGroup then
+                    local noGroups = moveMenu:CreateButton("No groups")
+                    if noGroups and noGroups.SetEnabled then noGroups:SetEnabled(false) end
+                end
             end
 
             rootDescription:CreateButton("Export", function()
@@ -327,6 +376,37 @@ end
 local W = MSWA_W
 local T = W and W.Theme or {}
 
+local function MSWA_ApplyReadableFS(fs, sizeDelta)
+    if not fs then return end
+    if W and W.ApplyReadableFont then
+        W.ApplyReadableFont(fs, sizeDelta or 0)
+        return
+    end
+    local ok, font, size, flags = pcall(fs.GetFont, fs)
+    if ok and font and size then
+        local baseFont = fs._MSWAReadableBaseFont or font
+        local baseSize = fs._MSWAReadableBaseSize
+        local baseFlags = fs._MSWAReadableBaseFlags
+        if not baseSize then
+            baseSize = size or 12
+            baseFlags = flags or ""
+            fs._MSWAReadableBaseFont = baseFont
+            fs._MSWAReadableBaseSize = baseSize
+            fs._MSWAReadableBaseFlags = baseFlags
+        end
+        local targetSize = math.max(8, math.floor((baseSize or 12) + (sizeDelta or 0) + 0.5))
+        local targetFlags = baseFlags or ""
+        if fs._MSWAReadableAppliedSize ~= targetSize or fs._MSWAReadableAppliedFont ~= baseFont or fs._MSWAReadableAppliedFlags ~= targetFlags then
+            fs:SetFont(baseFont, targetSize, targetFlags)
+            fs._MSWAReadableAppliedFont = baseFont
+            fs._MSWAReadableAppliedSize = targetSize
+            fs._MSWAReadableAppliedFlags = targetFlags
+        end
+    end
+    if fs.SetShadowColor then fs:SetShadowColor(0, 0, 0, 0.95) end
+    if fs.SetShadowOffset then fs:SetShadowOffset(1, -1) end
+end
+
 -----------------------------------------------------------
 -- Re-declare after full definition (same as original)
 -----------------------------------------------------------
@@ -355,6 +435,19 @@ local _navButtons = {}
 local _currentPageKey = nil
 local _pageHost = nil
 
+local function HideAllPageFrames(exceptKey)
+    for pageKey, page in pairs(_pages) do
+        local frame = page and page.frame
+        if frame then
+            if exceptKey and pageKey == exceptKey then
+                frame:Show()
+            else
+                frame:Hide()
+            end
+        end
+    end
+end
+
 -----------------------------------------------------------
 -- Page switching (PeelDamage MenuCore pattern)
 -----------------------------------------------------------
@@ -362,19 +455,26 @@ local function SwitchPage(key)
     if not _pages[key] then return end
     if W.CloseAllDropdowns then W.CloseAllDropdowns() end
 
-    if _currentPageKey and _pages[_currentPageKey] and _pages[_currentPageKey].frame then
-        _pages[_currentPageKey].frame:Hide()
+    -- Hard-hide every page first. This avoids rare stale-page bleed/overlap
+    -- when selection/page updates happen in the same frame.
+    HideAllPageFrames(nil)
+
+    for _, btn in pairs(_navButtons) do
+        if btn.SetActive then btn:SetActive(false) end
     end
-    for _, btn in pairs(_navButtons) do if btn.SetActive then btn:SetActive(false) end end
 
     if not _pages[key].frame then
         if _pages[key].build then
             _pages[key].frame = _pages[key].build(_pageHost)
-            if _pages[key].frame then _pages[key].frame:SetAllPoints(_pageHost) end
+            if _pages[key].frame then
+                _pages[key].frame:ClearAllPoints()
+                _pages[key].frame:SetAllPoints(_pageHost)
+            end
         end
     end
 
     if _pages[key].frame then
+        HideAllPageFrames(key)
         _pages[key].frame:Show()
         if _pages[key].frame.Refresh then pcall(_pages[key].frame.Refresh, _pages[key].frame) end
     end
@@ -408,6 +508,7 @@ MSWA_UpdateDetailPanel = function()
         local db = MSWA_GetDB(); local g = (db.groups or {})[gid]
         if not g then MSWA.selectedGroupID = nil
         else
+            HideAllPageFrames(nil)
             if f.groupPanel then f.groupPanel:Show(); if f.groupPanel.Sync then f.groupPanel:Sync() end end
             if _pageHost then _pageHost:Hide() end
             if f.navRail then f.navRail:Hide() end
@@ -418,6 +519,7 @@ MSWA_UpdateDetailPanel = function()
 
     -- Nothing selected
     if not key then
+        HideAllPageFrames(nil)
         if f.groupPanel then f.groupPanel:Hide() end
         if _pageHost then _pageHost:Hide() end
         if f.navRail then f.navRail:Hide() end
@@ -430,6 +532,11 @@ MSWA_UpdateDetailPanel = function()
     if f.emptyPanel then f.emptyPanel:Hide() end
     if f.navRail then f.navRail:Show() end
     if _pageHost then _pageHost:Show() end
+    if _currentPageKey then
+        HideAllPageFrames(_currentPageKey)
+    else
+        HideAllPageFrames(nil)
+    end
 
     -- Refresh current page
     if _currentPageKey and _pages[_currentPageKey] and _pages[_currentPageKey].frame then
@@ -764,8 +871,18 @@ local function BuildTriggerPage(host)
         pageTitle:SetText(name .. abTag)
 
         -- Subtitle: spell/item ID info
+        local isTrinket = MSWA_IsTrinketKey(key)
         if isDraft then
             pageSub:SetText("Enter a Spell or Item ID below, or drag from Spellbook/Bags.")
+        elseif isTrinket then
+            local slot = MSWA_KeyToTrinketSlot(key)
+            local itemID = MSWA_GetTrinketItemID(slot)
+            local itemName = itemID and GetItemInfo and GetItemInfo(itemID) or nil
+            if itemName then
+                pageSub:SetText(("Trinket Slot %d - %s (Item %d)"):format(slot, itemName, itemID))
+            else
+                pageSub:SetText(("Trinket Slot %d%s"):format(slot, itemID and (" - Item " .. itemID) or " - empty"))
+            end
         elseif MSWA_IsItemKey(key) then
             pageSub:SetText(("Item %d"):format(MSWA_KeyToItemID(key) or 0))
         elseif type(key) == "number" then
@@ -776,7 +893,7 @@ local function BuildTriggerPage(host)
             pageSub:SetText("")
         end
 
-        -- Show Add-ID area only for drafts (or always visible at reduced prominence)
+        -- Show Add-ID area only for drafts (not trinkets)
         addLabel:SetShown(isDraft); addEdit:SetShown(isDraft); addBtn:SetShown(isDraft)
         dropZone:SetShown(isDraft)
 
@@ -806,10 +923,11 @@ local function BuildTriggerPage(host)
         chargeDurLabel:SetShown(isCharges); chargeDurEdit:SetShown(isCharges)
 
         -- DYNAMIC RE-ANCHOR: idHeader anchors to last visible sub-element
-        -- Hide rekey for drafts (drafts use the Add-ID area at top)
-        idHeader:SetShown(not isDraft); rekeyLabel:SetShown(not isDraft); rekeyEdit:SetShown(not isDraft); rekeyBtn:SetShown(not isDraft); rekeyHint:SetShown(not isDraft)
+        -- Hide rekey for drafts and trinkets (trinkets use fixed slot keys)
+        local showRekey = not isDraft and not isTrinket
+        idHeader:SetShown(showRekey); rekeyLabel:SetShown(showRekey); rekeyEdit:SetShown(showRekey); rekeyBtn:SetShown(showRekey); rekeyHint:SetShown(showRekey)
 
-        if not isDraft then
+        if showRekey then
             idHeader:ClearAllPoints()
             if isCharges then
                 idHeader:SetPoint("TOPLEFT", chargeDurLabel, "BOTTOMLEFT", 0, -14)
@@ -824,12 +942,19 @@ local function BuildTriggerPage(host)
             end
         end
 
-        -- Anchor section: re-anchor below idHeader or mode cards for drafts
+        -- Anchor section: re-anchor below idHeader, mode sub-settings, or mode cards
         anchorHeader:ClearAllPoints()
         if isDraft then
             anchorHeader:SetPoint("TOPLEFT", subAnchor, "BOTTOMLEFT", 0, -14)
-        else
+        elseif showRekey then
             anchorHeader:SetPoint("TOPLEFT", rekeyHint, "BOTTOMLEFT", 0, -12)
+        else
+            -- Trinkets: anchor directly below last visible sub-setting
+            if isCharges then anchorHeader:SetPoint("TOPLEFT", chargeDurLabel, "BOTTOMLEFT", 0, -14)
+            elseif isBuffAura then anchorHeader:SetPoint("TOPLEFT", baStacksCheck, "BOTTOMLEFT", 0, -14)
+            elseif isReminder then anchorHeader:SetPoint("TOPLEFT", reminderTextLabel, "BOTTOMLEFT", 0, -14)
+            elseif hasBuffMode then anchorHeader:SetPoint("TOPLEFT", hasteCheck, "BOTTOMLEFT", 0, -14)
+            else anchorHeader:SetPoint("TOPLEFT", subAnchor, "BOTTOMLEFT", 0, -14) end
         end
 
         -- Sync values
@@ -1074,10 +1199,20 @@ local function BuildTextPage(host)
     -- Stacks section
     local h2 = W.SectionHeader(c, "Stack Counter", textColor, -16)
 
+    local ddStackMode = W.Dropdown(c, "Display", 200,
+        function() return {
+            { text = "Auto (show when > 1)", value = "auto" },
+            { text = "Always Show",          value = "show" },
+            { text = "Hide",                 value = "hide" },
+        } end,
+        function() local s = GetSel(); return (s and s.stackShowMode) or "auto" end,
+        function(v) local s = EnsureSel(); if s then s.stackShowMode = (v ~= "auto") and v or nil end; MSWA_RequestUpdateSpells() end)
+    ddStackMode:SetPoint("TOPLEFT", h2, "BOTTOMLEFT", 0, -10)
+
     local ddStackFont = W.Dropdown(c, "Font", 200, fontChoices,
         function() local s = GetSel(); local db = MSWA_GetDB(); return (s and s.stackFontKey) or (db and db.stackFontKey) or (db and db.fontKey) or "DEFAULT" end,
         function(v) local key = GetSelKey(); if key then local s = EnsureSel(); s.stackFontKey = (v ~= "DEFAULT") and v or nil end; MSWA_InvalidateIconCache() end)
-    ddStackFont:SetPoint("TOPLEFT", h2, "BOTTOMLEFT", 0, -10)
+    ddStackFont:SetPoint("TOPLEFT", ddStackMode, "BOTTOMLEFT", 0, -8)
 
     local stackSizeLabel = W.Label(c, "Size:", "TOPLEFT", ddStackFont, "BOTTOMLEFT", 0, -8)
     local stackSizeEdit = W.EditBox(c, 50, 22, true); stackSizeEdit:SetPoint("LEFT", stackSizeLabel, "RIGHT", 8, 0)
@@ -1101,6 +1236,7 @@ local function BuildTextPage(host)
         ddFont:Refresh()
         local sz = tonumber(s.textFontSize or db.textFontSize or 12); sizeEdit:SetText(tostring(math.max(6, math.min(48, sz))))
         ddPos:Refresh(); textColor:Refresh()
+        ddStackMode:Refresh()
         ddStackFont:Refresh()
         stackSizeEdit:SetText(tostring(tonumber(s.stackFontSize or db.stackFontSize or 12)))
         stackColor:Refresh()
@@ -1461,7 +1597,7 @@ local function MSWA_CreateOptionsFrame()
     f.btnGroup = W.Button(listPanel, "Group", 60, 22); f.btnGroup:SetPoint("LEFT", f.btnExport, "RIGHT", 4, 0)
 
     -- Aura list scroll
-    local rowHeight = 24
+    local rowHeight = 26
     local MAX_VISIBLE_ROWS = 28
     f.rowHeight = rowHeight
 
@@ -1524,12 +1660,220 @@ local function MSWA_CreateOptionsFrame()
     MSWA._multiSelect = MSWA._multiSelect or {}
     MSWA._lastClickedKey = nil
 
+    MSWA._listDrag = nil
+
+    local function MSWA_ListGetCursorUI()
+        if not GetCursorPosition then return nil, nil end
+        local cx, cy = GetCursorPosition()
+        local scale = (UIParent and UIParent.GetEffectiveScale and UIParent:GetEffectiveScale()) or 1
+        if not scale or scale == 0 then scale = 1 end
+        return cx / scale, cy / scale
+    end
+
+    local function MSWA_ClearListDragIndicators()
+        if not f.rows then return end
+        for ri = 1, MAX_VISIBLE_ROWS do
+            local r = f.rows[ri]
+            if r then
+                if r.dragInsertTop then r.dragInsertTop:Hide() end
+                if r.dragInsertBot then r.dragInsertBot:Hide() end
+                if r.dragHoverTex then r.dragHoverTex:Hide() end
+            end
+        end
+    end
+
+    local function MSWA_ListScrollPixels(pixels)
+        local current = scrollFrame:GetVerticalScroll() or 0
+        FauxScrollFrame_OnVerticalScroll(scrollFrame, current + pixels, rowHeight, function() f:UpdateAuraList() end)
+    end
+
+    local function MSWA_GetListDropTarget()
+        local drag = MSWA._listDrag
+        if not drag then return nil end
+
+        local cx, cy = MSWA_ListGetCursorUI()
+        if not cx then return nil end
+
+        local lpLeft, lpRight = listPanel:GetLeft(), listPanel:GetRight()
+        local lpBottom, lpTop = listPanel:GetBottom(), listPanel:GetTop()
+        if lpLeft and lpRight and lpBottom and lpTop and cx >= lpLeft and cx <= lpRight and cy >= lpBottom and cy <= lpTop then
+            local now = GetTime and GetTime() or 0
+            if cy >= (lpTop - 18) then
+                if not drag._lastScroll or (now - drag._lastScroll) > 0.05 then
+                    drag._lastScroll = now
+                    MSWA_ListScrollPixels(-rowHeight)
+                end
+            elseif cy <= (lpBottom + 18) then
+                if not drag._lastScroll or (now - drag._lastScroll) > 0.05 then
+                    drag._lastScroll = now
+                    MSWA_ListScrollPixels(rowHeight)
+                end
+            end
+        end
+
+        local visibleRows = f:GetVisibleRows()
+        for ri = 1, visibleRows do
+            local row = f.rows[ri]
+            if row and row:IsShown() then
+                local left, right = row:GetLeft(), row:GetRight()
+                local bottom, top = row:GetBottom(), row:GetTop()
+                if left and right and bottom and top and cx >= left and cx <= right and cy >= bottom and cy <= top then
+                    if row.entryType == "GROUP" and row.groupID then
+                        return { kind = "GROUP", row = row, gid = row.groupID }
+                    elseif row.entryType == "UNGROUPED" then
+                        return { kind = "UNGROUPED", row = row }
+                    elseif row.entryType == "AURA" and row.key ~= nil then
+                        local mid = (top + bottom) * 0.5
+                        return {
+                            kind = "AURA",
+                            row = row,
+                            key = row.key,
+                            gid = row.groupID,
+                            pos = (cy >= mid) and "BEFORE" or "AFTER",
+                        }
+                    else
+                        return { kind = "NONE", row = row }
+                    end
+                end
+            end
+        end
+
+        return { kind = "NONE" }
+    end
+
+    local function MSWA_UpdateListDragVisual(target)
+        MSWA_ClearListDragIndicators()
+        if not target or not target.row then return end
+        if target.kind == "AURA" then
+            if target.pos == "BEFORE" then
+                target.row.dragInsertTop:Show()
+            else
+                target.row.dragInsertBot:Show()
+            end
+        elseif target.kind == "GROUP" or target.kind == "UNGROUPED" then
+            if target.row.dragHoverTex then target.row.dragHoverTex:Show() end
+        end
+    end
+
+    local function MSWA_ListDragApply(target)
+        local drag = MSWA._listDrag
+        if not drag or not target then return end
+
+        if target.kind == "UNGROUPED" then
+            if drag.groupID ~= nil and type(MSWA_MoveAuraToGroupPosition) == "function" then
+                MSWA_MoveAuraToGroupPosition(drag.key, nil, nil)
+            end
+            return
+        end
+
+        if target.kind == "GROUP" then
+            if target.gid and target.gid ~= drag.groupID and type(MSWA_MoveAuraToGroupPosition) == "function" then
+                local members = type(MSWA_EnsureGroupMembers) == "function" and MSWA_EnsureGroupMembers(target.gid) or nil
+                local insertIndex = (type(members) == "table") and (#members + 1) or 1
+                MSWA_MoveAuraToGroupPosition(drag.key, target.gid, insertIndex)
+            end
+            return
+        end
+
+        if target.kind == "AURA" then
+            if target.key == drag.key and target.gid == drag.groupID then return end
+
+            if target.gid and type(MSWA_MoveAuraToGroupPosition) == "function" then
+                local members = type(MSWA_EnsureGroupMembers) == "function" and MSWA_EnsureGroupMembers(target.gid) or nil
+                local filtered = {}
+                if type(members) == "table" then
+                    for mi = 1, #members do
+                        local memberKey = members[mi]
+                        if memberKey ~= drag.key then
+                            filtered[#filtered + 1] = memberKey
+                        end
+                    end
+                end
+
+                local insertIndex = #filtered + 1
+                for mi = 1, #filtered do
+                    if filtered[mi] == target.key then
+                        insertIndex = (target.pos == "BEFORE") and mi or (mi + 1)
+                        break
+                    end
+                end
+                if insertIndex < 1 then insertIndex = 1 end
+                if insertIndex > (#filtered + 1) then insertIndex = #filtered + 1 end
+                MSWA_MoveAuraToGroupPosition(drag.key, target.gid, insertIndex)
+            elseif drag.groupID ~= nil and type(MSWA_MoveAuraToGroupPosition) == "function" then
+                MSWA_MoveAuraToGroupPosition(drag.key, nil, nil)
+            end
+        end
+    end
+
+    local function MSWA_EndListDrag(cancel)
+        local drag = MSWA._listDrag
+        if not drag then return end
+        local target = MSWA_GetListDropTarget() or drag.currentTarget
+        MSWA._listDrag = nil
+        MSWA_ClearListDragIndicators()
+        if f.dragOverlay then f.dragOverlay:Hide() end
+        if cancel or not target or target.kind == "NONE" then return end
+        MSWA_ListDragApply(target)
+    end
+
+    local function MSWA_EnsureListDragOverlay()
+        if f.dragOverlay then return f.dragOverlay end
+        local overlay = CreateFrame("Frame", nil, UIParent)
+        overlay:SetAllPoints(UIParent)
+        overlay:SetFrameStrata("FULLSCREEN_DIALOG")
+        overlay:EnableMouse(true)
+        overlay:Hide()
+        overlay._accum = 0
+        overlay:SetScript("OnUpdate", function(self, elapsed)
+            if not MSWA._listDrag then self:Hide(); return end
+            self._accum = (self._accum or 0) + (elapsed or 0)
+            if self._accum < 0.02 then return end
+            self._accum = 0
+            local target = MSWA_GetListDropTarget()
+            if MSWA._listDrag then MSWA._listDrag.currentTarget = target end
+            MSWA_UpdateListDragVisual(target)
+        end)
+        overlay:SetScript("OnMouseUp", function(self, button)
+            if button == "LeftButton" then
+                MSWA_EndListDrag(false)
+            end
+        end)
+        overlay:SetScript("OnHide", function()
+            MSWA_ClearListDragIndicators()
+        end)
+        f.dragOverlay = overlay
+        return overlay
+    end
+
+    local function MSWA_BeginListDrag(row)
+        if not row or row.entryType ~= "AURA" or row.key == nil then return end
+        if f.inlineEdit and f.inlineEdit:IsShown() then
+            f.inlineEdit._renameKey = nil
+            f.inlineEdit._renameGroupID = nil
+            f.inlineEdit:Hide()
+            f.inlineEdit:ClearFocus()
+        end
+        local overlay = MSWA_EnsureListDragOverlay()
+        MSWA._listDrag = {
+            key = row.key,
+            groupID = row.groupID,
+            currentTarget = nil,
+            _lastScroll = 0,
+        }
+        overlay._accum = 0
+        overlay:Show()
+        local target = MSWA_GetListDropTarget()
+        if MSWA._listDrag then MSWA._listDrag.currentTarget = target end
+        MSWA_UpdateListDragVisual(target)
+    end
+
     -- Create list rows
     f.rows = {}
     for i = 1, MAX_VISIBLE_ROWS do
         local row = CreateFrame("Button", nil, listPanel)
         row:SetSize(270, rowHeight); row:SetPoint("TOPLEFT", scrollFrame, "TOPLEFT", 4, -((i - 1) * rowHeight))
-        row:EnableMouse(true); row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        row:EnableMouse(true); row:RegisterForClicks("LeftButtonUp", "RightButtonUp"); row:RegisterForDrag("LeftButton")
 
         row.icon = row:CreateTexture(nil, "ARTWORK"); row.icon:SetSize(20, 20); row.icon:SetPoint("LEFT", 2, 0)
         row.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
@@ -1541,6 +1885,8 @@ local function MSWA_CreateOptionsFrame()
         row.selectedTex:SetAllPoints(); row.selectedTex:SetColorTexture(T.accentR, T.accentG, T.accentB, 0.35); row.selectedTex:Hide()
         row.multiSelTex = row:CreateTexture(nil, "BACKGROUND", nil, 1)
         row.multiSelTex:SetAllPoints(); row.multiSelTex:SetColorTexture(0, 0.8, 0.8, 0.15); row.multiSelTex:Hide()
+        row.dragHoverTex = row:CreateTexture(nil, "OVERLAY", nil, 2)
+        row.dragHoverTex:SetAllPoints(); row.dragHoverTex:SetColorTexture(T.accentR, T.accentG, T.accentB, 0.18); row.dragHoverTex:Hide()
 
         row.dragInsertTop = row:CreateTexture(nil, "OVERLAY"); row.dragInsertTop:SetHeight(2)
         row.dragInsertTop:SetPoint("TOPLEFT", 0, 1); row.dragInsertTop:SetPoint("TOPRIGHT", 0, 1)
@@ -1595,6 +1941,18 @@ local function MSWA_CreateOptionsFrame()
                 f:UpdateAuraList()
             end
         end)
+        row:SetScript("OnDragStart", function(self)
+            if self.entryType == "AURA" and self.key ~= nil then
+                MSWA_BeginListDrag(self)
+            end
+        end)
+        row:SetScript("OnDragStop", function()
+            C_Timer.After(0, function()
+                if MSWA and MSWA._listDrag then
+                    MSWA_EndListDrag(false)
+                end
+            end)
+        end)
 
         f.rows[i] = row
     end
@@ -1626,7 +1984,7 @@ local function MSWA_CreateOptionsFrame()
             local row = self.rows[i]; local idx = offset + i; local entry = entries[idx]
             if entry then
                 row.entryType = entry.entryType; row.groupID = entry.groupID; row.key = entry.key; row.indent = entry.indent or 0
-                row:Show(); row.selectedTex:Hide(); row.multiSelTex:Hide(); row.dragInsertTop:Hide(); row.dragInsertBot:Hide()
+                row:Show(); row.selectedTex:Hide(); row.multiSelTex:Hide(); if row.dragHoverTex then row.dragHoverTex:Hide() end; row.dragInsertTop:Hide(); row.dragInsertBot:Hide()
                 if row.sepTop then row.sepTop:Hide() end; if row.sepBottom then row.sepBottom:Hide() end
                 row.icon:SetTexture(nil); row:SetAlpha(1)
                 if row.icon.SetDesaturated then row.icon:SetDesaturated(false) end
@@ -1663,7 +2021,7 @@ local function MSWA_CreateOptionsFrame()
                 end
             else
                 row.entryType = nil; row.groupID = nil; row.key = nil; row.indent = 0
-                row.icon:SetTexture(nil); row.text:SetText(""); row.selectedTex:Hide(); row.multiSelTex:Hide()
+                row.icon:SetTexture(nil); row.text:SetText(""); row.selectedTex:Hide(); row.multiSelTex:Hide(); if row.dragHoverTex then row.dragHoverTex:Hide() end
                 row.dragInsertTop:Hide(); row.dragInsertBot:Hide()
                 if row.sepTop then row.sepTop:Hide() end; if row.sepBottom then row.sepBottom:Hide() end
                 row:Hide()
@@ -1672,7 +2030,7 @@ local function MSWA_CreateOptionsFrame()
         for i = visibleRows + 1, MAX_VISIBLE_ROWS do
             local row = self.rows[i]; if row then
                 row.entryType = nil; row.groupID = nil; row.key = nil; row.icon:SetTexture(nil); row.text:SetText("")
-                row.selectedTex:Hide(); row.multiSelTex:Hide(); row.dragInsertTop:Hide(); row.dragInsertBot:Hide()
+                row.selectedTex:Hide(); row.multiSelTex:Hide(); if row.dragHoverTex then row.dragHoverTex:Hide() end; row.dragInsertTop:Hide(); row.dragInsertBot:Hide()
                 if row.sepTop then row.sepTop:Hide() end; if row.sepBottom then row.sepBottom:Hide() end; row:Hide()
             end
         end
@@ -1709,6 +2067,10 @@ local function MSWA_CreateOptionsFrame()
     _pageHost = CreateFrame("Frame", nil, content)
     _pageHost:SetPoint("TOPLEFT", navRail, "TOPRIGHT", 6, 0)
     _pageHost:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 0, 0)
+    _pageHost:SetScript("OnHide", function()
+        if W.CloseAllDropdowns then W.CloseAllDropdowns() end
+        HideAllPageFrames(nil)
+    end)
 
     -- rightTitle removed — aura name is shown inside each page header via Refresh()
 
@@ -1793,6 +2155,13 @@ local function MSWA_CreateOptionsFrame()
     end)
     f.btnIDInfo:SetPoint("LEFT", f.btnPreview, "RIGHT", 4, 0)
 
+    f.btnCDMVis = W.Button(bottomBar, "CDM UI", 70, 22, function()
+        if MSWA_ToggleCooldownViewerVisibilityFrame then
+            MSWA_ToggleCooldownViewerVisibilityFrame()
+        end
+    end)
+    f.btnCDMVis:SetPoint("LEFT", f.btnIDInfo, "RIGHT", 4, 0)
+
     local statusText = bottomBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     statusText:SetPoint("RIGHT", bottomBar, "RIGHT", -8, 0); W.SkinMuted(statusText)
     f._statusText = statusText
@@ -1819,6 +2188,28 @@ local function MSWA_CreateOptionsFrame()
                 db.spellSettings[dk] = s
                 MSWA.selectedSpellID = dk; MSWA.selectedGroupID = nil; SwitchPage("trigger"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
             end)
+
+            -- Trinket sub-menu
+            local trinketMenu = rootDescription:CreateButton("Trinket Tracker")
+            trinketMenu:CreateButton("Trinket 1 (Slot 13)", function()
+                local tKey = "trinket:13"
+                local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}
+                if db.trackedSpells[tKey] then MSWA_Print("Trinket 1 already tracked."); return end
+                db.trackedSpells[tKey] = true
+                db.spellSettings = db.spellSettings or {}
+                db.spellSettings[tKey] = db.spellSettings[tKey] or {}
+                MSWA.selectedSpellID = tKey; MSWA.selectedGroupID = nil; SwitchPage("trigger"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
+            end)
+            trinketMenu:CreateButton("Trinket 2 (Slot 14)", function()
+                local tKey = "trinket:14"
+                local db = MSWA_GetDB(); db.trackedSpells = db.trackedSpells or {}
+                if db.trackedSpells[tKey] then MSWA_Print("Trinket 2 already tracked."); return end
+                db.trackedSpells[tKey] = true
+                db.spellSettings = db.spellSettings or {}
+                db.spellSettings[tKey] = db.spellSettings[tKey] or {}
+                MSWA.selectedSpellID = tKey; MSWA.selectedGroupID = nil; SwitchPage("trigger"); MSWA_RequestUpdateSpells(); MSWA_RefreshOptionsList()
+            end)
+
             rootDescription:CreateButton("From Template...", function()
                 if MSWA_ToggleTemplateBrowser then MSWA_ToggleTemplateBrowser() end
             end)
@@ -1849,12 +2240,218 @@ local function MSWA_CreateOptionsFrame()
     end)
     f:SetScript("OnHide", function()
         MSWA.selectedSpellID = nil; MSWA.selectedGroupID = nil
+        if f.dragOverlay then f.dragOverlay:Hide() end
+        MSWA._listDrag = nil
         if MSWA.previewMode then MSWA.previewMode = false; if f.btnPreview then f.btnPreview:SetText("Preview") end; MSWA_RequestUpdateSpells() end
     end)
 
     f:Hide(); MSWA.optionsFrame = f; MSWA_RebuildFontChoices()
     f:UpdateAuraList()
     return f
+end
+
+-----------------------------------------------------------
+-- Blizzard Cooldown Viewer visibility popup
+-----------------------------------------------------------
+
+local _cvVisFrame = nil
+
+local function MSWA_GetCooldownViewerRuleLabelMap()
+    return {
+        IN_COMBAT = "In combat",
+        WHILE_MOUNTED = "Mounted",
+        WHILE_NOT_MOUNTED = "Not mounted",
+        MOUSEOVER = "On mouseover",
+        PLAYER_HAS_TARGET = "Have target",
+        PLAYER_CASTING = "Player casting",
+        PLAYER_IN_GROUP = "In party/raid",
+        ALWAYS_HIDDEN = "Always hidden",
+    }
+end
+
+local function MSWA_GetCooldownViewerSummary(frameName)
+    if not MSWA_GetCooldownViewerVisibility then return "Use Blizzard defaults" end
+    local cfg = MSWA_GetCooldownViewerVisibility(frameName)
+    if type(cfg) ~= "table" then return "Use Blizzard defaults" end
+    local labels = MSWA_GetCooldownViewerRuleLabelMap()
+    if cfg.ALWAYS_HIDDEN then return "Always hidden" end
+    local out = {}
+    local order = { "IN_COMBAT", "WHILE_MOUNTED", "WHILE_NOT_MOUNTED", "MOUSEOVER", "PLAYER_HAS_TARGET", "PLAYER_CASTING", "PLAYER_IN_GROUP" }
+    for i = 1, #order do
+        local key = order[i]
+        if cfg[key] then out[#out + 1] = labels[key] or key end
+    end
+    if #out == 0 then return "Use Blizzard defaults" end
+    return table.concat(out, ", ")
+end
+
+local function MSWA_CreateCooldownViewerVisibilityFrame()
+    if _cvVisFrame then return _cvVisFrame end
+
+    local f = CreateFrame("Frame", "MSWA_CooldownViewerVisibilityFrame", UIParent, "BackdropTemplate")
+    f:SetSize(760, 640)
+    f:SetPoint("CENTER")
+    f:SetFrameStrata("DIALOG")
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    W.ApplyBackdrop(f, 0.96)
+    if type(UISpecialFrames) == "table" then
+        table.insert(UISpecialFrames, "MSWA_CooldownViewerVisibilityFrame")
+    end
+
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 14, -12)
+    title:SetText("Blizzard Cooldown Viewer")
+    W.SkinTitle(title)
+
+    local sub = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+    sub:SetText("Hide or fade Blizzard CDM viewers so MSA can mirror them without duplicate icons/bars.")
+    W.SkinMuted(sub)
+
+    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", -2, -2)
+
+    local body = CreateFrame("Frame", nil, f)
+    body:SetPoint("TOPLEFT", 12, -52)
+    body:SetPoint("BOTTOMRIGHT", -12, 42)
+
+    local fadeSlider = W.Slider(body, "Fade amount", 0, 100, 1,
+        function()
+            if MSWA_GetCooldownViewerFadePercent then
+                return MSWA_GetCooldownViewerFadePercent()
+            end
+            return 100
+        end,
+        function(v)
+            if MSWA_SetCooldownViewerFadePercent then
+                MSWA_SetCooldownViewerFadePercent(v)
+            end
+            if f.Refresh then f:Refresh() end
+        end,
+        "Fade amount",
+        "0% keeps faded viewers fully visible. 100% fully hides them when their rules are not active."
+    )
+    fadeSlider:SetPoint("TOPLEFT", body, "TOPLEFT", 0, 0)
+    f.fadeSlider = fadeSlider
+
+    local sharedHover = W.Checkbox(body, "Shared mouseover", nil, function(v)
+        if MSWA_SetCooldownViewerSharedMouseover then
+            MSWA_SetCooldownViewerSharedMouseover(v)
+        end
+        if f.Refresh then f:Refresh() end
+    end, "Shared mouseover", "If enabled, hovering one viewer also reveals the others that use the mouseover rule.")
+    sharedHover:SetPoint("TOPLEFT", fadeSlider, "BOTTOMLEFT", 0, -8)
+    f.sharedHover = sharedHover
+
+    local tip = body:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    tip:SetPoint("TOPLEFT", sharedHover, "BOTTOMLEFT", 0, -8)
+    tip:SetText("Tip: Set Buff Bar / Buff Icon to Always hidden if you only want the MSA CDM template version.")
+    W.SkinMuted(tip)
+
+    local sections = {
+        { frameName = "EssentialCooldownViewer", label = "Essential Cooldown Viewer" },
+        { frameName = "UtilityCooldownViewer", label = "Utility Cooldown Viewer" },
+        { frameName = "BuffBarCooldownViewer", label = "Buff Bar Cooldown Viewer" },
+        { frameName = "BuffIconCooldownViewer", label = "Buff Icon Cooldown Viewer" },
+    }
+    local ruleOrder = {
+        "IN_COMBAT",
+        "WHILE_MOUNTED",
+        "WHILE_NOT_MOUNTED",
+        "MOUSEOVER",
+        "PLAYER_HAS_TARGET",
+        "PLAYER_CASTING",
+        "PLAYER_IN_GROUP",
+        "ALWAYS_HIDDEN",
+    }
+    local ruleLabels = MSWA_GetCooldownViewerRuleLabelMap()
+
+    f.sections = {}
+
+    local anchor = tip
+    for i = 1, #sections do
+        local spec = sections[i]
+        local sec = CreateFrame("Frame", nil, body, "BackdropTemplate")
+        sec:SetSize(710, 110)
+        sec:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -12)
+        W.ApplyBackdrop(sec, 0.22)
+
+        sec.title = sec:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        sec.title:SetPoint("TOPLEFT", 10, -8)
+        sec.title:SetText(spec.label)
+        W.SkinTitle(sec.title)
+
+        sec.summary = sec:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        sec.summary:SetPoint("TOPLEFT", sec.title, "BOTTOMLEFT", 0, -3)
+        sec.summary:SetWidth(620)
+        sec.summary:SetJustifyH("LEFT")
+        W.SkinMuted(sec.summary)
+
+        sec.resetBtn = W.Button(sec, "Reset", 60, 20, function()
+            if MSWA_ClearCooldownViewerVisibility then
+                MSWA_ClearCooldownViewerVisibility(spec.frameName)
+            end
+            if f.Refresh then f:Refresh() end
+        end)
+        sec.resetBtn:SetPoint("TOPRIGHT", -10, -8)
+
+        sec.checks = {}
+        for ridx = 1, #ruleOrder do
+            local ruleKey = ruleOrder[ridx]
+            local cb = W.Checkbox(sec, ruleLabels[ruleKey], nil, function(v)
+                if MSWA_SetCooldownViewerVisibility then
+                    MSWA_SetCooldownViewerVisibility(spec.frameName, ruleKey, v)
+                end
+                if f.Refresh then f:Refresh() end
+            end)
+            local col = (ridx - 1) % 3
+            local row = math.floor((ridx - 1) / 3)
+            cb:SetPoint("TOPLEFT", sec, "TOPLEFT", 10 + (col * 230), -38 - (row * 24))
+            cb._frameName = spec.frameName
+            cb._ruleKey = ruleKey
+            sec.checks[ruleKey] = cb
+        end
+
+        f.sections[spec.frameName] = sec
+        anchor = sec
+    end
+
+    local help = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    help:SetPoint("BOTTOMLEFT", 14, 16)
+    help:SetText("Slash: /msa cdmvis")
+    W.SkinMuted(help)
+
+    function f:Refresh()
+        if self.fadeSlider and self.fadeSlider.Refresh then self.fadeSlider:Refresh() end
+        if self.sharedHover and self.sharedHover.SetChecked and MSWA_GetCooldownViewerSharedMouseover then
+            self.sharedHover:SetChecked(MSWA_GetCooldownViewerSharedMouseover())
+        end
+
+        for frameName, sec in pairs(self.sections or {}) do
+            sec.summary:SetText(MSWA_GetCooldownViewerSummary(frameName))
+            local cfg = MSWA_GetCooldownViewerVisibility and MSWA_GetCooldownViewerVisibility(frameName) or nil
+            for ruleKey, cb in pairs(sec.checks) do
+                cb:SetChecked(cfg and cfg[ruleKey] == true)
+            end
+        end
+    end
+
+    f:SetScript("OnShow", function(self)
+        if self.Refresh then self:Refresh() end
+    end)
+
+    f:Hide()
+    _cvVisFrame = f
+    return f
+end
+
+function MSWA_ToggleCooldownViewerVisibilityFrame()
+    local f = _cvVisFrame or MSWA_CreateCooldownViewerVisibilityFrame()
+    if f:IsShown() then f:Hide() else f:Show() end
 end
 
 -----------------------------------------------------------
@@ -1929,12 +2526,21 @@ SlashCmdList["MIDNIGHTSIMPLEWEAKAURAS"] = function(msg)
         return
     end
 
+    if cmd == "cdm" or cmd == "cdmvis" or cmd == "cdmhide" or cmd == "viewer" then
+        if MSWA_ToggleCooldownViewerVisibilityFrame then
+            MSWA_ToggleCooldownViewerVisibilityFrame()
+        else
+            MSWA_Print("Cooldown Viewer UI not available.")
+        end
+        return
+    end
+
     if cmd == "template" or cmd == "templates" or cmd == "browse" then
         if MSWA_ToggleTemplateBrowser then MSWA_ToggleTemplateBrowser() else MSWA_Print("Template browser not loaded.") end
         return
     end
 
-    MSWA_Print("Commands: /msa, /msa move, /msa lock, /msa reset, /msa add <ID>, /msa remove <ID>, /msa additem <ID>, /msa removeitem <ID>, /msa list, /msa id, /msa template")
+    MSWA_Print("Commands: /msa, /msa move, /msa lock, /msa reset, /msa add <ID>, /msa remove <ID>, /msa additem <ID>, /msa removeitem <ID>, /msa list, /msa id, /msa cdmvis, /msa template")
 end
 
 -----------------------------------------------------------

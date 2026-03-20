@@ -51,40 +51,10 @@ local function GetEffectiveBuffDuration(s)
 end
 
 -----------------------------------------------------------
--- Reminder threshold helper for BUFF_AURA
--- Returns true if aura should be HIDDEN (above threshold).
--- Safe: secret values -> never hide, absent -> never hide.
+-- Reminder threshold: now in MSA_BuffBridge.lua (MSWA_ShouldHideByThreshold)
 -----------------------------------------------------------
-
-local _issv_engine = _G.issecretvalue
-
-local function ShouldHideByThreshold(s, auraData, now)
-    if not s or not s.reminderThresholdMin then return false end
-    local thresh = tonumber(s.reminderThresholdMin)
-    if not thresh or thresh <= 0 then return false end
-
-    -- No aura data = absent -> never hide (show as reminder)
-    if not auraData then return false end
-
-    local exp = auraData.expirationTime
-    local dur = auraData.duration
-
-    -- Secret values -> can't check, always show
-    if _issv_engine then
-        if (exp and _issv_engine(exp)) or (dur and _issv_engine(dur)) then
-            return false
-        end
-    end
-
-    -- Permanent buff (duration=0) -> always show (no timer = always remind)
-    if not dur or dur == 0 then return false end
-    if not exp or exp == 0 then return false end
-
-    local remaining = exp - now
-    if remaining <= 0 then return false end  -- expired -> show
-
-    -- Hide if remaining time is ABOVE threshold (buff still healthy)
-    return remaining > (thresh * 60)
+local ShouldHideByThreshold = function(s, auraData, now)
+    return MSWA_ShouldHideByThreshold(s, auraData, now)
 end
 
 -----------------------------------------------------------
@@ -376,12 +346,18 @@ local function MSWA_UpdateSpells()
             if enabled then
                 local spellID
                 local itemFromSpells   -- item instance keys (item:ID:N) stored in trackedSpells
+                local isTrinket
                 if type(trackedKey) == "number" then
                     spellID = trackedKey
                 elseif MSWA_IsSpellInstanceKey(trackedKey) then
                     spellID = MSWA_KeyToSpellID(trackedKey)
                 elseif MSWA_IsItemKey(trackedKey) then
                     itemFromSpells = MSWA_KeyToItemID(trackedKey)
+                elseif MSWA_IsTrinketKey(trackedKey) then
+                    -- Trinket slot: resolve to equipped item ID (may be nil if empty)
+                    local slot = MSWA_KeyToTrinketSlot(trackedKey)
+                    itemFromSpells = slot and MSWA_GetTrinketItemID(slot)
+                    isTrinket = true  -- always enter item path, even if slot empty
                 end
 
                 if spellID then
@@ -659,86 +635,36 @@ local function MSWA_UpdateSpells()
                             index = index + 1
 
                         elseif s and s.auraMode == "BUFF_AURA" then
-                            -- ========== BUFF AURA MODE (direct poll, like WeakAuras/EQoL) ==========
-                            -- CDM entries: read aura from CDM viewer frame by cooldownID
-                            -- Non-CDM: GetPlayerAuraBySpellID -> nil = absent, table = active
-                            -- issecretvalue pattern from EQoL for field access
-                            local buffSID = s.auraSpellID or spellID
-                            local cdmID = s.cdmCooldownID
-                            local auraData = cdmID and MSWA_GetCDMFrameAuraData(cdmID, buffSID) or MSWA_GetPlayerAuraDataBySpellID(buffSID)
-                            local buffActive = (auraData ~= nil)
-                            local showWhenAbsent = s.showWhenAbsent
-                            local showMe = buffActive or showWhenAbsent or previewMode or key == selectedKey
-
-                            -- Reminder threshold: hide if buff is healthy (remaining > threshold)
-                            if showMe and buffActive and ShouldHideByThreshold(s, auraData, now) then
-                                showMe = false
-                            end
+                            -- ========== BUFF AURA MODE (event-driven cache via BuffBridge) ==========
+                            local auraData, buffActive = MSWA_ResolveBuffAura(s, spellID)
+                            local showMe = buffActive or s.showWhenAbsent or previewMode or key == selectedKey
+                            if showMe and buffActive and ShouldHideByThreshold(s, auraData, now) then showMe = false end
 
                             if showMe then
                                 PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
-
                                 if buffActive then
-                                    -- Cooldown sweep (EQoL pattern):
-                                    -- Secret fields -> SetCooldownFromExpirationTime (designed for secrets)
-                                    -- Non-secret fields -> read normally, use SetCooldown for precision
-                                    -- Duration 0 (permanent buffs like poisons) -> no sweep needed
-                                    local cd = btn.cooldown
-                                    if cd then
-                                        local dur = auraData.duration
-                                        local exp = auraData.expirationTime
-                                        local isSecret = MSWA_IsSecretValue and (MSWA_IsSecretValue(dur) or MSWA_IsSecretValue(exp))
-                                        if isSecret then
-                                            -- Secret: pass directly to Blizzard API
-                                            if cd.SetCooldownFromExpirationTime then
-                                                cd:SetCooldownFromExpirationTime(exp, dur, auraData.timeMod)
-                                                cd.__mswaSet = true
-                                            end
-                                        elseif dur and dur > 0 and exp then
-                                            -- Non-secret with duration: normal cooldown
-                                            MSWA_ApplyCooldownFrame(cd, exp - dur, dur, auraData.timeMod or 1, exp)
-                                        else
-                                            -- Permanent buff (duration=0): no sweep
-                                            MSWA_ClearCooldownFrame(cd)
-                                        end
-                                    end
-                                    -- Stacks (v6: use styled target, respect hideStacksOnCooldown)
+                                    MSWA_ApplyAuraCooldown(btn.cooldown, auraData)
                                     if s.showStacks ~= false and not (s.hideStacksOnCooldown and MSWA_IsCooldownActive(btn)) then
                                         local sText = MSWA_GetAuraStackText(auraData, 2)
                                         local sTarget = btn.stackText or btn.count
-                                        if sText and sTarget then
-                                            sTarget:SetText(sText); sTarget:Show()
-                                        else
-                                            ClearStackAndCount(btn)
-                                        end
-                                    else
-                                        ClearStackAndCount(btn)
-                                    end
+                                        if sText and sTarget then sTarget:SetText(sText); sTarget:Show() else ClearStackAndCount(btn) end
+                                    else ClearStackAndCount(btn) end
                                     btn.icon:SetDesaturated(false)
                                     btn:SetAlpha(ComputeAlpha(s, false, inCombat))
                                 else
-                                    -- Absent state
-                                    MSWA_ClearCooldownFrame(btn.cooldown)
-                                    ClearStackAndCount(btn)
+                                    MSWA_ClearCooldownFrame(btn.cooldown); ClearStackAndCount(btn)
                                     btn.icon:SetDesaturated(s.desaturateOnAbsent ~= false)
                                     btn:SetAlpha(tonumber(s.alphaOnAbsent) or 0.45)
                                 end
-
-                                -- Glow: active/absent
                                 local glowVal = buffActive and 9999 or 0
                                 local gs = s.glow
-                                if gs and gs.enabled then
-                                    MSWA_UpdateGlow_Fast(btn, gs, glowVal, buffActive)
-                                elseif btn._msaGlowActive then
-                                    MSWA_StopGlow(btn)
-                                end
+                                if gs and gs.enabled then MSWA_UpdateGlow_Fast(btn, gs, glowVal, buffActive)
+                                elseif btn._msaGlowActive then MSWA_StopGlow(btn) end
                                 MSWA_ApplyConditionalTextColor_Fast(btn, s, db, glowVal, buffActive)
                                 if btn._msaReminderLabel then btn._msaReminderLabel:Hide() end
                                 if btn._msaChargeLabel then btn._msaChargeLabel:Hide() end
                                 index = index + 1
-                            else
-                                HideButton(btn)
-                            end
+                            else HideButton(btn) end
 
                         else
                             -- ========== NORMAL SPELL MODE ==========
@@ -797,9 +723,9 @@ local function MSWA_UpdateSpells()
                         end
                     end
 
-                elseif itemFromSpells then
-                    -- ========== ITEM INSTANCE (item:ID:N in trackedSpells) ==========
-                    local itemID = itemFromSpells
+                elseif itemFromSpells or isTrinket then
+                    -- ========== ITEM INSTANCE (item:ID:N or trinket:SLOT in trackedSpells) ==========
+                    local itemID = itemFromSpells  -- may be nil for empty trinket slot
                     local key = trackedKey
                     local s   = settingsTable[key] or settingsTable[tostring(key)]
                     local shouldLoad = MSWA_ShouldLoadAura(s, inCombat, inEncounter)
@@ -818,31 +744,14 @@ local function MSWA_UpdateSpells()
                         if (not s or s.auraMode ~= "CHARGES") and btn._msaChargeLabel then btn._msaChargeLabel:Hide() end
 
                         if s and s.auraMode == "BUFF_AURA" then
-                            -- ========== ITEM INSTANCE: BUFF AURA (direct poll) ==========
-                            local buffSID = s.auraSpellID or itemID
-                            local cdmID = s.cdmCooldownID
-                            local auraData = cdmID and MSWA_GetCDMFrameAuraData(cdmID, buffSID) or MSWA_GetPlayerAuraDataBySpellID(buffSID)
-                            local buffActive = (auraData ~= nil)
+                            -- ========== ITEM INSTANCE: BUFF AURA (event-driven cache via BuffBridge) ==========
+                            local auraData, buffActive = MSWA_ResolveBuffAura(s, itemID)
                             local showMe = buffActive or s.showWhenAbsent or previewMode or key == selectedKey
-
-                            -- Reminder threshold: hide if buff is healthy (remaining > threshold)
-                            if showMe and buffActive and ShouldHideByThreshold(s, auraData, now) then
-                                showMe = false
-                            end
+                            if showMe and buffActive and ShouldHideByThreshold(s, auraData, now) then showMe = false end
                             if showMe then
                                 PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
                                 if buffActive then
-                                    local cd = btn.cooldown
-                                    if cd then
-                                        local dur = auraData.duration
-                                        local exp = auraData.expirationTime
-                                        local isSecret = MSWA_IsSecretValue and (MSWA_IsSecretValue(dur) or MSWA_IsSecretValue(exp))
-                                        if isSecret and cd.SetCooldownFromExpirationTime then
-                                            cd:SetCooldownFromExpirationTime(exp, dur, auraData.timeMod); cd.__mswaSet = true
-                                        elseif dur and dur > 0 and exp then
-                                            MSWA_ApplyCooldownFrame(cd, exp - dur, dur, auraData.timeMod or 1, exp)
-                                        else MSWA_ClearCooldownFrame(cd) end
-                                    end
+                                    MSWA_ApplyAuraCooldown(btn.cooldown, auraData)
                                     if s.showStacks ~= false and not (s.hideStacksOnCooldown and MSWA_IsCooldownActive(btn)) then
                                         local sText = MSWA_GetAuraStackText(auraData, 2)
                                         local sTarget = btn.stackText or btn.count
@@ -906,7 +815,7 @@ local function MSWA_UpdateSpells()
                                 -- === BUFF_THEN_CD: buff expired -> show remaining item CD ===
                                 PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
 
-                                if GetItemCooldown then
+                                if itemID and GetItemCooldown then
                                     local iStart, iDuration = GetItemCooldown(itemID)
                                     local ok, onCD = pcall(_itemCDCheck, iStart, iDuration)
                                     if ok and onCD then
@@ -936,7 +845,7 @@ local function MSWA_UpdateSpells()
                                     local rem = 0
                                     local need = (s.glow and s.glow.enabled) or s.textColor2Enabled
                                     if need then foundNeedsTimerTick = true end
-                                    if need and GetItemCooldown then
+                                    if need and itemID and GetItemCooldown then
                                         local st, dur = GetItemCooldown(itemID)
                                         local ok2, r = pcall(_itemCDRemaining, st, dur, now)
                                         if ok2 and type(r) == "number" then
@@ -1112,7 +1021,7 @@ local function MSWA_UpdateSpells()
                             -- ========== ITEM INSTANCE: NORMAL COOLDOWN MODE ==========
                             PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
 
-                            if GetItemCooldown then
+                            if itemID and GetItemCooldown then
                                 local iStart, iDuration = GetItemCooldown(itemID)
                                 local ok, onCD = pcall(_itemCDCheck, iStart, iDuration)
                                 if ok and onCD then
@@ -1136,6 +1045,8 @@ local function MSWA_UpdateSpells()
                                 btn.icon:SetDesaturated(false)
                             end
                             if IsItemZeroCount(s, itemID) then btn.icon:SetDesaturated(true) end
+                            -- Empty trinket slot: show dimmed
+                            if isTrinket and not itemID then btn.icon:SetDesaturated(true) end
 
                             btn:SetAlpha(ComputeAlpha(s, onCD, inCombat))
 
@@ -1143,7 +1054,7 @@ local function MSWA_UpdateSpells()
                             if onCD and s then
                                 local need = (s.glow and s.glow.enabled) or s.textColor2Enabled
                                     if need then foundNeedsTimerTick = true end
-                                if need and GetItemCooldown then
+                                if need and itemID and GetItemCooldown then
                                     local st, dur = GetItemCooldown(itemID)
                                     local ok2, r = pcall(_itemCDRemaining, st, dur, now)
                                     if ok2 and type(r) == "number" then
@@ -1210,26 +1121,13 @@ local function MSWA_UpdateSpells()
                 if (not s or s.auraMode ~= "CHARGES") and btn._msaChargeLabel then btn._msaChargeLabel:Hide() end
 
                 if s and s.auraMode == "BUFF_AURA" then
-                    -- ========== ITEM: BUFF AURA (EQoL GetUnitAuras pattern) ==========
-                    local buffSID = s.auraSpellID or itemID
-                    local cdmID = s.cdmCooldownID
-                    local auraData = cdmID and MSWA_GetCDMFrameAuraData(cdmID, buffSID) or MSWA_GetPlayerAuraDataBySpellID(buffSID)
-                    local buffActive = (auraData ~= nil)
+                    -- ========== ITEM: BUFF AURA (event-driven cache via BuffBridge) ==========
+                    local auraData, buffActive = MSWA_ResolveBuffAura(s, itemID)
                     local showMe = buffActive or s.showWhenAbsent or previewMode or key == selectedKey
                     if showMe then
                         PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
                         if buffActive then
-                            local cd = btn.cooldown
-                            if cd then
-                                local dur = auraData.duration
-                                local exp = auraData.expirationTime
-                                local isSecret = MSWA_IsSecretValue(dur) or MSWA_IsSecretValue(exp)
-                                if isSecret and cd.SetCooldownFromExpirationTime then
-                                    cd:SetCooldownFromExpirationTime(exp, dur, auraData.timeMod); cd.__mswaSet = true
-                                elseif dur and dur > 0 and exp then
-                                    MSWA_ApplyCooldownFrame(cd, exp - dur, dur, auraData.timeMod or 1, exp)
-                                else MSWA_ClearCooldownFrame(cd) end
-                            end
+                            MSWA_ApplyAuraCooldown(btn.cooldown, auraData)
                             if s.showStacks ~= false and not (s.hideStacksOnCooldown and MSWA_IsCooldownActive(btn)) then
                                 local sText = MSWA_GetAuraStackText(auraData, 2)
                                 local sTarget = btn.stackText or btn.count
@@ -1293,7 +1191,7 @@ local function MSWA_UpdateSpells()
                         -- === BUFF_THEN_CD: buff expired -> show remaining item CD ===
                         PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
 
-                        if GetItemCooldown then
+                        if itemID and GetItemCooldown then
                             local iStart, iDuration = GetItemCooldown(itemID)
                             local ok, onCD = pcall(_itemCDCheck, iStart, iDuration)
                             if ok and onCD then
@@ -1323,7 +1221,7 @@ local function MSWA_UpdateSpells()
                             local rem = 0
                             local need = (s.glow and s.glow.enabled) or s.textColor2Enabled
                                     if need then foundNeedsTimerTick = true end
-                            if need and GetItemCooldown then
+                            if need and itemID and GetItemCooldown then
                                 local st, dur = GetItemCooldown(itemID)
                                 local ok2, r = pcall(_itemCDRemaining, st, dur, now)
                                 if ok2 and type(r) == "number" then
@@ -1499,7 +1397,7 @@ local function MSWA_UpdateSpells()
                     -- ========== NORMAL ITEM COOLDOWN MODE ==========
                     PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
 
-                    if GetItemCooldown then
+                    if itemID and GetItemCooldown then
                         local iStart, iDuration = GetItemCooldown(itemID)
                         -- v5: no closure - pcall on named function
                         local ok, onCD = pcall(_itemCDCheck, iStart, iDuration)
@@ -1531,8 +1429,7 @@ local function MSWA_UpdateSpells()
                     if onCD and s then
                         local need = (s.glow and s.glow.enabled) or s.textColor2Enabled
                                     if need then foundNeedsTimerTick = true end
-                        if need and GetItemCooldown then
-                            -- v5: no closure - pcall on named function
+                        if need and itemID and GetItemCooldown then
                             local st, dur = GetItemCooldown(itemID)
                             local ok2, r = pcall(_itemCDRemaining, st, dur, now)
                             if ok2 and type(r) == "number" then
@@ -1601,7 +1498,6 @@ local function MSWA_UpdateSpells()
     -- CD calls are trivial). ZERO changes to mode branches.
     -----------------------------------------------------------
     if MSWA_IsBarMode then
-        local _issv = _G.issecretvalue
         for i = 1, index - 1 do
             local btn = icons[i]
             if btn and btn:IsShown() then
@@ -1622,18 +1518,23 @@ local function MSWA_UpdateSpells()
                             bInfo.name = MSWA_GetSpellName and MSWA_GetSpellName(numKey)
                         else
                             local bkeyStr = tostring(bkey)
-                            -- spell:ID:N instance key
-                            local sid = bkeyStr:match("^spell:(%d+)")
-                            if sid then
-                                sid = tonumber(sid)
-                                if sid then bInfo.name = MSWA_GetSpellName and MSWA_GetSpellName(sid) end
+                            -- trinket:SLOT key
+                            if MSWA_IsTrinketKey(bkey) then
+                                bInfo.name = MSWA_GetDisplayNameForKey(bkey)
                             else
-                                -- item:ID or item:ID:N
-                                local iid = bkeyStr:match("^item:(%d+)")
-                                iid = iid and tonumber(iid)
-                                if iid then
-                                    if C_Item and C_Item.GetItemNameByID then
-                                        bInfo.name = C_Item.GetItemNameByID(iid)
+                                -- spell:ID:N instance key
+                                local sid = bkeyStr:match("^spell:(%d+)")
+                                if sid then
+                                    sid = tonumber(sid)
+                                    if sid then bInfo.name = MSWA_GetSpellName and MSWA_GetSpellName(sid) end
+                                else
+                                    -- item:ID or item:ID:N
+                                    local iid = bkeyStr:match("^item:(%d+)")
+                                    iid = iid and tonumber(iid)
+                                    if iid then
+                                        if C_Item and C_Item.GetItemNameByID then
+                                            bInfo.name = C_Item.GetItemNameByID(iid)
+                                        end
                                     end
                                 end
                             end
@@ -1645,31 +1546,7 @@ local function MSWA_UpdateSpells()
                     local mode = bs.auraMode
 
                     if mode == "BUFF_AURA" then
-                        local sid = bs.auraSpellID or tonumber(bkey)
-                        local cdmID = bs.cdmCooldownID
-                        local ad
-                        if cdmID and MSWA_GetCDMFrameAuraData then
-                            ad = MSWA_GetCDMFrameAuraData(cdmID, sid)
-                        elseif sid and MSWA_GetPlayerAuraDataBySpellID then
-                            ad = MSWA_GetPlayerAuraDataBySpellID(sid)
-                        end
-                        if ad then
-                            local e = ad.expirationTime
-                            local d = ad.duration
-                            if e and d then
-                                if (_issv and _issv(e)) or (_issv and _issv(d)) then
-                                    bInfo.isSecret = true
-                                else
-                                    bInfo.expires  = e
-                                    bInfo.duration = d
-                                end
-                            end
-                            bInfo.stacks = MSWA_GetAuraStackText and MSWA_GetAuraStackText(ad, 2)
-                        else
-                            bInfo.isActive = (bs.showWhenAbsent == true or previewMode)
-                            if not bInfo.isActive then bInfo.isActive = false end
-                            bInfo.absentAlpha = tonumber(bs.alphaOnAbsent) or 0.45
-                        end
+                        MSWA_CollectBuffAuraBarInfo(bInfo, bs, bkey, previewMode)
 
                     elseif mode == "AUTOBUFF" or mode == "BUFF_THEN_CD" then
                         local ab = autoBuff and autoBuff[bkey]
@@ -1680,13 +1557,24 @@ local function MSWA_UpdateSpells()
                             bInfo.expires  = tStart + bdur
                             bInfo.duration = bdur
                         elseif mode == "BUFF_THEN_CD" then
-                            -- CD phase
+                            -- CD phase: spell CD or trinket item CD
                             local numSID = tonumber(bkey)
                             if numSID and C_Spell and C_Spell.GetSpellCooldown then
                                 local cdI = C_Spell.GetSpellCooldown(numSID)
                                 if cdI and cdI.duration and cdI.duration > 1.5 then
                                     bInfo.expires  = cdI.startTime + cdI.duration
                                     bInfo.duration = cdI.duration
+                                end
+                            elseif MSWA_IsTrinketKey(bkey) and GetItemCooldown then
+                                local slot = MSWA_KeyToTrinketSlot(bkey)
+                                local tItemID = slot and MSWA_GetTrinketItemID(slot)
+                                if tItemID then
+                                    local start, duration = GetItemCooldown(tItemID)
+                                    local ok2, isActive = pcall(function() return start and start > 0 and duration and duration > 1.5 end)
+                                    if ok2 and isActive then
+                                        bInfo.expires  = start + duration
+                                        bInfo.duration = duration
+                                    end
                                 end
                             end
                         end
@@ -1716,6 +1604,17 @@ local function MSWA_UpdateSpells()
                                 if cdI and cdI.duration and cdI.duration > 1.5 then
                                     bInfo.expires  = cdI.startTime + cdI.duration
                                     bInfo.duration = cdI.duration
+                                end
+                            end
+                        elseif MSWA_IsTrinketKey(bkey) then
+                            -- Trinket item CD
+                            local slot = MSWA_KeyToTrinketSlot(bkey)
+                            local tItemID = slot and MSWA_GetTrinketItemID(slot)
+                            if tItemID and GetItemCooldown then
+                                local st, dur = GetItemCooldown(tItemID)
+                                if st and dur and dur > 1.5 then
+                                    bInfo.expires  = st + dur
+                                    bInfo.duration = dur
                                 end
                             end
                         else
@@ -1970,6 +1869,20 @@ function MSWA_InvalidateIconCache()
     MSWA_ForceUpdateSpells()
 end
 
+--- Invalidate only trinket icon textures (gear swap).
+--- Clears cached key on buttons tracking trinket:13 / trinket:14
+--- so SetIconTexture refreshes their equipped item texture.
+function MSWA_InvalidateTrinketIcons()
+    if not MSWA.icons then return end
+    for i = 1, MSWA.MAX_ICONS do
+        local btn = MSWA.icons[i]
+        if btn and MSWA_IsTrinketKey(btn.spellID) then
+            btn._msaCachedKey = nil
+            btn._msaStyleKey  = nil
+        end
+    end
+end
+
 -----------------------------------------------------------
 -- Event registration (ONLY called when count changes)
 -----------------------------------------------------------
@@ -2166,11 +2079,17 @@ do
             end
         end
 
-        -- Check trackedSpells for item instance keys (item:ID:N)
+        -- Check trackedSpells for item instance keys (item:ID:N) and trinket keys
         if db.trackedSpells then
             for trackedKey, enabled in pairs(db.trackedSpells) do
-                if enabled and MSWA_IsItemKey(trackedKey) then
-                    local itemID = MSWA_KeyToItemID(trackedKey)
+                if enabled then
+                    local itemID
+                    if MSWA_IsItemKey(trackedKey) then
+                        itemID = MSWA_KeyToItemID(trackedKey)
+                    elseif MSWA_IsTrinketKey(trackedKey) then
+                        local slot = MSWA_KeyToTrinketSlot(trackedKey)
+                        itemID = slot and MSWA_GetTrinketItemID(slot)
+                    end
                     if itemID then
                         local result = CheckItemCD(trackedKey, itemID, db, now)
                         if result then

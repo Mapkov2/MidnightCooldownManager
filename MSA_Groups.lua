@@ -138,6 +138,121 @@ function MSWA_MoveGroupMember(gid, key, delta)
     end
 end
 
+local function _reflowGroupMembers(db, gid)
+    if not gid then return end
+    if not (db and db.groups and db.groups[gid]) then return end
+
+    db.groupMembers = db.groupMembers or {}
+    db.spellSettings = db.spellSettings or {}
+
+    local members = db.groupMembers[gid]
+    if type(members) ~= "table" then return end
+
+    local group = db.groups[gid]
+    local size = tonumber(group.size) or MSWA.ICON_SIZE or 32
+    local step = size + (MSWA.ICON_SPACE or 0)
+    local dir = group.growthDirection or "RIGHT"
+
+    for i = #members, 1, -1 do
+        local mkey = members[i]
+        if not (db.auraGroups and db.auraGroups[mkey] == gid) then
+            table.remove(members, i)
+        end
+    end
+
+    for i = 1, #members do
+        local mkey = members[i]
+        local s = db.spellSettings[mkey]
+        if type(s) ~= "table" then s = {}; db.spellSettings[mkey] = s end
+        local count = i - 1
+        if dir == "LEFT" then
+            s.x = -(count * step)
+            s.y = 0
+        elseif dir == "UP" then
+            s.x = 0
+            s.y = count * step
+        elseif dir == "DOWN" then
+            s.x = 0
+            s.y = -(count * step)
+        else
+            s.x = count * step
+            s.y = 0
+        end
+        s.width = s.width or size
+        s.height = s.height or size
+        s.anchorFrame = nil
+    end
+end
+
+function MSWA_ReflowGroupMembers(gid)
+    local db = MSWA_GetDB()
+    _reflowGroupMembers(db, gid)
+end
+
+function MSWA_MoveAuraToGroupPosition(key, targetGid, targetIndex)
+    if key == nil then return end
+
+    local db = MSWA_GetDB()
+    db.auraGroups = db.auraGroups or {}
+    db.groupMembers = db.groupMembers or {}
+    db.spellSettings = db.spellSettings or {}
+
+    local sourceGid = db.auraGroups[key]
+    local s = db.spellSettings[key]
+    if type(s) ~= "table" then s = {}; db.spellSettings[key] = s end
+
+    if sourceGid and type(db.groupMembers[sourceGid]) == "table" then
+        _arrayRemoveValue(db.groupMembers[sourceGid], key)
+    end
+
+    if targetGid and db.groups and db.groups[targetGid] then
+        local members = db.groupMembers[targetGid]
+        if type(members) ~= "table" then
+            members = {}
+            db.groupMembers[targetGid] = members
+        end
+
+        _arrayRemoveValue(members, key)
+
+        local insertAt = tonumber(targetIndex) or (#members + 1)
+        if insertAt < 1 then insertAt = 1 end
+        if insertAt > (#members + 1) then insertAt = #members + 1 end
+
+        table.insert(members, insertAt, key)
+        db.auraGroups[key] = targetGid
+        s.anchorFrame = nil
+
+        _reflowGroupMembers(db, targetGid)
+        if sourceGid and sourceGid ~= targetGid then
+            _reflowGroupMembers(db, sourceGid)
+        end
+    else
+        local oldGroup = sourceGid and db.groups and db.groups[sourceGid] or nil
+        if oldGroup then
+            s.x = (tonumber(s.x) or 0) + (tonumber(oldGroup.x) or 0)
+            s.y = (tonumber(s.y) or 0) + (tonumber(oldGroup.y) or 0)
+            if oldGroup.anchorFrame and oldGroup.anchorFrame ~= "" then
+                s.anchorFrame = oldGroup.anchorFrame
+            end
+        end
+        db.auraGroups[key] = nil
+
+        if sourceGid then
+            _reflowGroupMembers(db, sourceGid)
+        end
+    end
+
+    if type(MSWA_RequestFullRefresh) == "function" then
+        MSWA_RequestFullRefresh()
+    elseif type(MSWA_RequestUpdateSpells) == "function" then
+        MSWA_RequestUpdateSpells()
+    end
+    if type(MSWA_RefreshOptionsList) == "function" then
+        MSWA_RefreshOptionsList()
+    end
+end
+
+
 -----------------------------------------------------------
 -- Group helpers (WA-like)
 -----------------------------------------------------------
