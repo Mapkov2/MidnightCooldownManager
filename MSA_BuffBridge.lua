@@ -236,6 +236,11 @@ end
 local _cdmFrameCache = {}  -- [tostring(cooldownID)] = frame
 local _cdmDirty      = true
 local _cdmScratch    = {}  -- reusable select() buffer
+local _cdmCycleCache = {}  -- cleared once per UpdateSpells() cycle
+
+function MSWA_BeginCDMAuraCycle()
+    wipe(_cdmCycleCache)
+end
 
 -- Capture vararg into reusable scratch table
 local function CaptureCDMChildren(buf, ...)
@@ -286,6 +291,7 @@ end
 --- Invalidate CDM cache (called on viewer changes)
 function MSWA_InvalidateCDMCache()
     _cdmDirty = true
+    wipe(_cdmCycleCache)
 end
 
 -- Check if an auraInstanceID is usable (non-secret, positive number)
@@ -304,9 +310,15 @@ function MSWA_GetCDMFrameAuraData(cooldownID, fallbackSID)
         return nil
     end
 
+    local cacheKey = tostring(cooldownID)
+    local cycleEntry = _cdmCycleCache[cacheKey]
+    if cycleEntry ~= nil then
+        return cycleEntry ~= false and cycleEntry or nil
+    end
+
     RebuildCDMFrameCache()
 
-    local frame = _cdmFrameCache[tostring(cooldownID)]
+    local frame = _cdmFrameCache[cacheKey]
     if frame then
         -- 1) Read auraInstanceID from frame -> GetAuraDataByAuraInstanceID
         local auraInstanceID = frame.auraInstanceID
@@ -323,7 +335,10 @@ function MSWA_GetCDMFrameAuraData(cooldownID, fallbackSID)
 
             if C_UnitAuras and C_UnitAuras.GetAuraDataByAuraInstanceID then
                 local auraData = C_UnitAuras.GetAuraDataByAuraInstanceID(auraUnit, auraInstanceID)
-                if auraData then return auraData end
+                if auraData then
+                    _cdmCycleCache[cacheKey] = auraData
+                    return auraData
+                end
             end
         end
 
@@ -341,7 +356,7 @@ function MSWA_GetCDMFrameAuraData(cooldownID, fallbackSID)
                     if frame.Icon and frame.Icon.Icon and frame.Icon.Icon.GetTexture then
                         iconTex = frame.Icon.Icon:GetTexture()
                     end
-                    return {
+                    local synthetic = {
                         duration       = duration,
                         expirationTime = startTime + duration,
                         timeMod        = 1,
@@ -349,6 +364,8 @@ function MSWA_GetCDMFrameAuraData(cooldownID, fallbackSID)
                         icon           = iconTex,
                         _isCDMTotem    = true,
                     }
+                    _cdmCycleCache[cacheKey] = synthetic
+                    return synthetic
                 end
             end
         end
@@ -356,8 +373,11 @@ function MSWA_GetCDMFrameAuraData(cooldownID, fallbackSID)
 
     -- 3) Fallback: standard spellID-based lookup
     if fallbackSID then
-        return MSWA_GetPlayerAuraDataBySpellID(fallbackSID)
+        local auraData = MSWA_GetPlayerAuraDataBySpellID(fallbackSID)
+        _cdmCycleCache[cacheKey] = auraData or false
+        return auraData
     end
+    _cdmCycleCache[cacheKey] = false
     return nil
 end
 
@@ -485,7 +505,11 @@ end
 
 local eventFrame = CreateFrame("Frame", "MSWA_BuffEventFrame", UIParent)
 
-eventFrame:RegisterEvent("UNIT_AURA")
+if eventFrame.RegisterUnitEvent then
+    eventFrame:RegisterUnitEvent("UNIT_AURA", "player", "target")
+else
+    eventFrame:RegisterEvent("UNIT_AURA")
+end
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
 eventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
@@ -495,7 +519,7 @@ local function OnEvent(_, event, arg1, arg2)
     if event == "UNIT_AURA" then
         if arg1 == "player" then
             _playerDirty = true
-            _cdmDirty = true  -- CDM frames may have updated
+            wipe(_cdmCycleCache)
             if MSWA_RequestUpdateSpells then MSWA_RequestUpdateSpells() end
         elseif arg1 == "target" then
             _targetDirty = true
@@ -507,6 +531,7 @@ local function OnEvent(_, event, arg1, arg2)
     if event == "PLAYER_TARGET_CHANGED" then
         _targetDirty = true
         _cdmDirty = true
+        wipe(_cdmCycleCache)
         if MSWA_RequestUpdateSpells then MSWA_RequestUpdateSpells() end
         return
     end
@@ -525,6 +550,7 @@ local function OnEvent(_, event, arg1, arg2)
     _playerDirty = true
     _targetDirty = true
     _cdmDirty    = true
+    wipe(_cdmCycleCache)
     if MSWA_RequestUpdateSpells then MSWA_RequestUpdateSpells() end
 end
 
@@ -559,6 +585,558 @@ MSWA.COOLDOWN_VIEWER_VIS_RULES = CV_RULES
 
 function MSWA_GetCooldownViewerFrameNames()
     return CV_FRAME_NAMES
+end
+
+local _msaEssentialAttachCache = { viewer = nil, at = 0, width = 36, height = 36, spacing = 4, rows = nil }
+local _msaEssentialAttachHosts = {}
+local _msaEssentialActiveAttachments = {}
+local _msaMSUFBridgeState = { proxy = nil, viewer = nil, extraLeft = 0, extraRight = 0, active = false, revision = 0 }
+local _msaMSUFBridgeNotifyPending = false
+
+local function CV_ScheduleMSUFBridgeNotify()
+    if _msaMSUFBridgeNotifyPending then return end
+    _msaMSUFBridgeNotifyPending = true
+    local function _flush()
+        _msaMSUFBridgeNotifyPending = false
+        local cb = _G and _G.MSUF_OnCDMExtensionChanged
+        if type(cb) == "function" then
+            cb()
+        end
+    end
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0, _flush)
+    else
+        _flush()
+    end
+end
+
+local function CV_GetMSUFBridgeProxy(viewer)
+    local state = _msaMSUFBridgeState
+    local proxy = state.proxy
+    if not proxy then
+        proxy = CreateFrame("Frame", "MSWA_EssentialBridgeProxy", (viewer and viewer:GetParent()) or UIParent)
+        proxy:EnableMouse(false)
+        proxy:Hide()
+        state.proxy = proxy
+    end
+
+    local desiredParent = (viewer and viewer:GetParent()) or UIParent
+    if proxy:GetParent() ~= desiredParent then
+        proxy:SetParent(desiredParent)
+    end
+    if viewer and viewer.GetFrameStrata and proxy.SetFrameStrata then
+        proxy:SetFrameStrata(viewer:GetFrameStrata())
+    end
+    if viewer and viewer.GetFrameLevel and proxy.SetFrameLevel then
+        proxy:SetFrameLevel((viewer:GetFrameLevel() or 0) + 1)
+    end
+    return proxy
+end
+
+local function CV_UpdateMSUFBridge(viewer, extraLeft, extraRight)
+    local state = _msaMSUFBridgeState
+    local active = viewer and ((extraLeft or 0) + (extraRight or 0)) > 0 and true or false
+    local changed = false
+
+    if active and viewer then
+        local proxy = CV_GetMSUFBridgeProxy(viewer)
+        proxy:ClearAllPoints()
+        proxy:SetPoint("TOPLEFT", viewer, "TOPLEFT", -(extraLeft or 0), 0)
+        proxy:SetPoint("BOTTOMRIGHT", viewer, "BOTTOMRIGHT", (extraRight or 0), 0)
+        proxy:Show()
+    elseif state.proxy then
+        state.proxy:ClearAllPoints()
+        state.proxy:Hide()
+    end
+
+    if state.viewer ~= viewer then changed = true end
+    if math.abs((state.extraLeft or 0) - (extraLeft or 0)) > 0.5 then changed = true end
+    if math.abs((state.extraRight or 0) - (extraRight or 0)) > 0.5 then changed = true end
+    if (state.active and true or false) ~= active then changed = true end
+
+    state.viewer = viewer
+    state.extraLeft = extraLeft or 0
+    state.extraRight = extraRight or 0
+    state.active = active and true or false
+
+    if changed then
+        state.revision = (state.revision or 0) + 1
+        CV_ScheduleMSUFBridgeNotify()
+    end
+end
+
+function MSWA_GetOrCreateEssentialBridgeProxy()
+    local viewer = _G["EssentialCooldownViewer"] or _G["CooldownManager"]
+    if viewer and (not viewer.IsForbidden or not viewer:IsForbidden()) then
+        return CV_GetMSUFBridgeProxy(viewer)
+    end
+    return _msaMSUFBridgeState.proxy
+end
+
+function MSWA_GetEssentialBridgeFrame()
+    local state = _msaMSUFBridgeState
+    if state and state.active and state.proxy then
+        return state.proxy
+    end
+    return MSWA_GetEssentialCooldownViewerFrame and MSWA_GetEssentialCooldownViewerFrame() or (_G["EssentialCooldownViewer"] or _G["CooldownManager"])
+end
+
+function MSWA_GetEssentialBridgeRevision()
+    return (_msaMSUFBridgeState and _msaMSUFBridgeState.revision) or 0
+end
+
+local function CV_GetAttachHostToken(key)
+    if MSWA_KeyToTrinketSlot then
+        local slot = MSWA_KeyToTrinketSlot(key)
+        if slot then return tostring(slot) end
+    end
+    return tostring(key or "msa")
+end
+
+local function CV_GetFirstPointTuple(frame)
+    if not frame or not frame.GetPoint then return nil end
+    local point, relativeTo, relativePoint, xOfs, yOfs = frame:GetPoint(1)
+    return point, relativeTo, relativePoint, xOfs, yOfs
+end
+
+local function CV_PointHasSide(point, token)
+    return type(point) == "string" and point:find(token, 1, true) ~= nil
+end
+
+local function CV_ApplyViewerBounds(viewer)
+    if not viewer or (viewer.IsForbidden and viewer:IsForbidden()) then return end
+
+    local extraLeft, extraRight = 0, 0
+    local viewerLeft = viewer.GetLeft and viewer:GetLeft() or nil
+    local viewerRight = viewer.GetRight and viewer:GetRight() or nil
+
+    for _, entry in pairs(_msaEssentialActiveAttachments) do
+        if entry and entry.viewer == viewer then
+            local width = entry.width or 0
+            local offsetX = entry.offsetX or 0
+            local row = entry.row
+            if entry.side == "START" then
+                local baseLeft = nil
+                if row and row.leftButton and row.leftButton.left then
+                    baseLeft = row.leftButton.left
+                elseif type(viewerLeft) == "number" then
+                    baseLeft = viewerLeft
+                end
+                if type(baseLeft) == "number" and type(viewerLeft) == "number" then
+                    local outerLeft = baseLeft + offsetX - width
+                    local need = viewerLeft - outerLeft
+                    if type(need) == "number" and need > extraLeft then extraLeft = need end
+                end
+            else
+                local baseRight = nil
+                if row and row.rightButton and row.rightButton.right then
+                    baseRight = row.rightButton.right
+                elseif type(viewerRight) == "number" then
+                    baseRight = viewerRight
+                end
+                if type(baseRight) == "number" and type(viewerRight) == "number" then
+                    local outerRight = baseRight + offsetX + width
+                    local need = outerRight - viewerRight
+                    if type(need) == "number" and need > extraRight then extraRight = need end
+                end
+            end
+        end
+    end
+
+    if extraLeft < 0 then extraLeft = 0 end
+    if extraRight < 0 then extraRight = 0 end
+
+    CV_UpdateMSUFBridge(viewer, extraLeft, extraRight)
+end
+
+function MSWA_RegisterActiveEssentialAttachment(key, layout)
+    if not key or type(layout) ~= "table" or not layout.viewer then return end
+    _msaEssentialActiveAttachments[tostring(key)] = {
+        viewer = layout.viewer,
+        side = layout.side or "END",
+        row = layout.row,
+        offsetX = layout.offsetX or 0,
+        width = layout.width or 0,
+    }
+    CV_ApplyViewerBounds(layout.viewer)
+end
+
+function MSWA_UnregisterActiveEssentialAttachment(key)
+    if not key then return end
+    local token = tostring(key)
+    local entry = _msaEssentialActiveAttachments[token]
+    _msaEssentialActiveAttachments[token] = nil
+    if entry and entry.viewer then
+        CV_ApplyViewerBounds(entry.viewer)
+    end
+end
+
+function MSWA_GetEssentialAttachHost(key, viewer)
+    if not key then return nil end
+    viewer = viewer or MSWA_GetEssentialCooldownViewerFrame()
+    if not viewer then return nil end
+
+    local token = CV_GetAttachHostToken(key)
+    local host = _msaEssentialAttachHosts[token]
+    if not host then
+        host = CreateFrame("Frame", nil, viewer)
+        host:SetSize(1, 1)
+        host:EnableMouse(false)
+        host:Hide()
+        _msaEssentialAttachHosts[token] = host
+    elseif host:GetParent() ~= viewer then
+        host:SetParent(viewer)
+    end
+
+    if viewer.GetFrameStrata and host.SetFrameStrata then
+        host:SetFrameStrata(viewer:GetFrameStrata())
+    end
+    if viewer.GetFrameLevel and host.SetFrameLevel then
+        host:SetFrameLevel((viewer:GetFrameLevel() or 0) + 5)
+    end
+
+    return host
+end
+
+function MSWA_HideEssentialAttachHost(key)
+    if not key then return end
+    local token = CV_GetAttachHostToken(key)
+    local host = _msaEssentialAttachHosts[token]
+    if host then
+        host:ClearAllPoints()
+        host:Hide()
+    end
+    MSWA_UnregisterActiveEssentialAttachment(key)
+end
+
+local function CV_SafeBool(val)
+    if val == nil then return false end
+    if _issecretvalue and _issecretvalue(val) then return false end
+    return val == true
+end
+
+local function CV_SafeIsShown(frame)
+    if not frame or not frame.IsShown then return false end
+    local ok, shown = pcall(frame.IsShown, frame)
+    if not ok then return false end
+    return CV_SafeBool(shown)
+end
+
+local function CV_SafeObjectType(frame)
+    if not frame or not frame.GetObjectType then return nil end
+    local ok, objectType = pcall(frame.GetObjectType, frame)
+    if not ok or (_issecretvalue and _issecretvalue(objectType)) then return nil end
+    if type(objectType) ~= "string" then return nil end
+    return objectType
+end
+
+local function CV_SafeNumberMethod(frame, methodName)
+    local method = frame and frame[methodName]
+    if not method then return nil end
+    local ok, value = pcall(method, frame)
+    if not ok or (_issecretvalue and _issecretvalue(value)) then return nil end
+    if type(value) ~= "number" then return nil end
+    return value
+end
+
+local function CV_SafeCenter(frame)
+    if not frame or not frame.GetCenter then return nil, nil end
+    local ok, x, y = pcall(frame.GetCenter, frame)
+    if not ok then return nil, nil end
+    if (_issecretvalue and ((_issecretvalue(x)) or (_issecretvalue(y)))) then return nil, nil end
+    if type(x) ~= "number" or type(y) ~= "number" then return nil, nil end
+    return x, y
+end
+
+local function CV_IsMSAAttachButton(frame)
+    if not frame then return false end
+    if frame.spellID ~= nil then return true end
+    local name = (frame.GetName and frame:GetName()) or nil
+    return type(name) == "string" and name:find("MidnightSimpleAurasIcon", 1, true) == 1
+end
+
+local function CV_FindVisibleButtonMetrics(root, depth)
+    if not root or depth < 0 or not root.GetChildren then return nil, nil end
+    local kids = { root:GetChildren() }
+    for i = 1, #kids do
+        local child = kids[i]
+        if child and (not CV_IsMSAAttachButton(child)) and CV_SafeObjectType(child) == "Button" and CV_SafeIsShown(child) then
+            local w = CV_SafeNumberMethod(child, "GetWidth")
+            local h = CV_SafeNumberMethod(child, "GetHeight")
+            if type(w) == "number" and type(h) == "number" and w >= 18 and w <= 80 and h >= 18 and h <= 80 then
+                return w, h
+            end
+        end
+    end
+    if depth <= 0 then return nil, nil end
+    for i = 1, #kids do
+        local w, h = CV_FindVisibleButtonMetrics(kids[i], depth - 1)
+        if w and h then return w, h end
+    end
+    return nil, nil
+end
+
+local function CV_CollectVisibleButtons(root, depth, out)
+    if not root or depth < 0 or not root.GetChildren then return out end
+    out = out or {}
+    local kids = { root:GetChildren() }
+    for i = 1, #kids do
+        local child = kids[i]
+        if child and (not CV_IsMSAAttachButton(child)) and CV_SafeIsShown(child) and CV_SafeObjectType(child) == "Button" then
+            local w = CV_SafeNumberMethod(child, "GetWidth")
+            local h = CV_SafeNumberMethod(child, "GetHeight")
+            local x, y = CV_SafeCenter(child)
+            if type(w) == "number" and type(h) == "number" and type(x) == "number" and type(y) == "number" and w >= 18 and w <= 80 and h >= 18 and h <= 80 then
+                out[#out + 1] = {
+                    frame = child,
+                    width = w,
+                    height = h,
+                    cx = x,
+                    cy = y,
+                    left = x - (w * 0.5),
+                    right = x + (w * 0.5),
+                    top = y + (h * 0.5),
+                    bottom = y - (h * 0.5),
+                }
+            end
+        end
+    end
+    if depth <= 0 then return out end
+    for i = 1, #kids do
+        CV_CollectVisibleButtons(kids[i], depth - 1, out)
+    end
+    return out
+end
+
+local function CV_BuildRowsFromButtons(buttons)
+    if type(buttons) ~= "table" or #buttons == 0 then return nil end
+
+    table.sort(buttons, function(a, b)
+        if a.cy == b.cy then return a.cx < b.cx end
+        return a.cy > b.cy
+    end)
+
+    local avgH = 0
+    for i = 1, #buttons do avgH = avgH + (buttons[i].height or 0) end
+    avgH = (#buttons > 0) and (avgH / #buttons) or 36
+    local rowThreshold = math.max(8, math.floor((avgH * 0.45) + 0.5))
+
+    local rows = {}
+    for i = 1, #buttons do
+        local b = buttons[i]
+        local placed = false
+        for r = 1, #rows do
+            local row = rows[r]
+            if math.abs((b.cy or 0) - (row.cy or 0)) <= rowThreshold then
+                row.buttons[#row.buttons + 1] = b
+                row.cy = ((row.cy * row.count) + b.cy) / (row.count + 1)
+                row.count = row.count + 1
+                placed = true
+                break
+            end
+        end
+        if not placed then
+            rows[#rows + 1] = { buttons = { b }, cy = b.cy, count = 1 }
+        end
+    end
+
+    table.sort(rows, function(a, b) return (a.cy or 0) > (b.cy or 0) end)
+
+    for r = 1, #rows do
+        local row = rows[r]
+        table.sort(row.buttons, function(a, b) return (a.cx or 0) < (b.cx or 0) end)
+        row.index = r
+        row.leftButton = row.buttons[1]
+        row.rightButton = row.buttons[#row.buttons]
+
+        local width, height = 0, 0
+        local totalGap, gapCount = 0, 0
+        for i = 1, #row.buttons do
+            local b = row.buttons[i]
+            width = width + (b.width or 0)
+            height = height + (b.height or 0)
+            if i > 1 then
+                local prev = row.buttons[i - 1]
+                local gap = (b.left or 0) - (prev.right or 0)
+                if type(gap) == "number" and gap >= 0 and gap <= 40 then
+                    totalGap = totalGap + gap
+                    gapCount = gapCount + 1
+                end
+            end
+        end
+        row.width = (#row.buttons > 0) and (width / #row.buttons) or 36
+        row.height = (#row.buttons > 0) and (height / #row.buttons) or 36
+        row.spacing = (gapCount > 0) and (totalGap / gapCount) or 4
+    end
+
+    return rows
+end
+
+local function CV_RoundPixel(v)
+    v = tonumber(v) or 0
+    return math.floor(v + (v >= 0 and 0.5 or -0.5))
+end
+
+local function CV_ResolveAttachRowIndex(rows, pref)
+    if type(rows) ~= "table" or #rows == 0 then return 1 end
+    if pref == "ROW2" and rows[2] then return 2 end
+    if pref == "ROW1" and rows[1] then return 1 end
+    return 1
+end
+
+function MSWA_GetEssentialCooldownViewerFrame()
+    local f = _G["EssentialCooldownViewer"] or _G["CooldownManager"]
+    if not f then return nil end
+    if CV_SafeIsShown(f) then return f end
+    -- Keep using the real viewer frame even during transient visibility/layout churn.
+    -- This avoids attached trinkets falling back to standalone positioning and
+    -- visually "disappearing" when Blizzard momentarily rebuilds the viewer.
+    return f
+end
+
+function MSWA_GetAttachedTrinketLayout(key)
+    if not (MSWA_IsTrinketKey and MSWA_IsTrinketKey(key)) then return nil end
+
+    local viewer = MSWA_GetEssentialCooldownViewerFrame()
+    if not viewer then return nil end
+
+    local now = (GetTimePreciseSec and GetTimePreciseSec()) or (GetTime and GetTime()) or 0
+    local cache = _msaEssentialAttachCache
+    if cache.viewer ~= viewer or (now - (cache.at or 0)) > 0.25 then
+        local oldViewer = cache.viewer
+        local oldWidth = cache.width
+        local oldHeight = cache.height
+        local oldSpacing = cache.spacing
+        local oldRows = cache.rows
+
+        local w, h = CV_FindVisibleButtonMetrics(viewer, 2)
+        local rows = CV_BuildRowsFromButtons(CV_CollectVisibleButtons(viewer, 3, {}))
+        if rows and rows[1] then
+            w = rows[1].width or w
+            h = rows[1].height or h
+        end
+        if not w or not h then
+            local vh = viewer.GetHeight and viewer:GetHeight() or nil
+            if type(vh) == "number" and vh >= 20 and vh <= 96 then
+                w, h = vh, vh
+            end
+        end
+
+        cache.viewer = viewer
+        cache.at = now
+
+        if type(w) == "number" and w > 0 then
+            cache.width = math.floor(w + 0.5)
+        elseif oldViewer == viewer and type(oldWidth) == "number" and oldWidth > 0 then
+            cache.width = oldWidth
+        else
+            cache.width = 36
+        end
+
+        if type(h) == "number" and h > 0 then
+            cache.height = math.floor(h + 0.5)
+        elseif oldViewer == viewer and type(oldHeight) == "number" and oldHeight > 0 then
+            cache.height = oldHeight
+        else
+            cache.height = 36
+        end
+
+        if rows and rows[1] then
+            cache.rows = rows
+            cache.spacing = rows[1].spacing or 4
+        elseif oldViewer == viewer and oldRows and oldRows[1] then
+            cache.rows = oldRows
+            cache.spacing = oldSpacing or 4
+        else
+            cache.rows = nil
+            cache.spacing = 4
+        end
+    end
+
+    local db = MSWA_GetDB()
+    local tracked = db and db.trackedSpells or nil
+    local settings = db and db.spellSettings or nil
+    local s = settings and (settings[key] or settings[tostring(key)]) or nil
+    local side = (s and s.attachEssentialSide) or "END"
+    local rowPref = (s and s.attachEssentialRow) or "AUTO"
+    local exactSpacing = (s and s.attachEssentialExactSpacing) ~= false
+    local fineX = (s and tonumber(s.attachEssentialOffsetX)) or 0
+    local fineY = (s and tonumber(s.attachEssentialOffsetY)) or 0
+    local rowIndex = CV_ResolveAttachRowIndex(cache.rows, rowPref)
+    local row = cache.rows and cache.rows[rowIndex] or nil
+
+    local aw = row and row.width or cache.width or 36
+    local ah = row and row.height or cache.height or 36
+    local asp = exactSpacing and row and row.spacing or cache.spacing or 4
+    if not asp or asp < 0 then asp = 4 end
+
+    local prior = 0
+    local ordered = { "trinket:13", "trinket:14" }
+    local inCombat = InCombatLockdown and InCombatLockdown() and true or false
+    local inEncounter = IsEncounterInProgress and IsEncounterInProgress() and true or false
+    local previewMode = MSWA and MSWA.previewMode and true or false
+    local optFrame = MSWA and MSWA.optionsFrame or nil
+    local selectedKey = (optFrame and optFrame.IsShown and optFrame:IsShown() and MSWA.selectedSpellID) or nil
+
+    for i = 1, #ordered do
+        local tk = ordered[i]
+        if tk == key then break end
+
+        local os = settings and (settings[tk] or settings[tostring(tk)]) or nil
+        local otherItemID = MSWA_GetTrinketItemID(MSWA_KeyToTrinketSlot(tk))
+        local otherShouldLoad = os and MSWA_ShouldLoadAura and MSWA_ShouldLoadAura(os, inCombat, inEncounter)
+        local otherVisible = tracked and tracked[tk] and otherItemID and os and os.attachToEssential and (otherShouldLoad or previewMode or tk == selectedKey)
+
+        if otherVisible then
+            local otherSide = os.attachEssentialSide or "END"
+            local otherRow = CV_ResolveAttachRowIndex(cache.rows, os.attachEssentialRow or "AUTO")
+            if otherSide == side and otherRow == rowIndex then
+                prior = prior + 1
+            end
+        end
+    end
+
+    local anchorTo = nil
+    local point, relPoint, offX = nil, nil, 0
+    if row and row.leftButton and row.rightButton then
+        if side == "START" then
+            anchorTo = row.leftButton.frame
+            point, relPoint = "RIGHT", "LEFT"
+            offX = -((asp or 4) + (prior * ((aw or 36) + (asp or 4))))
+        else
+            anchorTo = row.rightButton.frame
+            point, relPoint = "LEFT", "RIGHT"
+            offX = (asp or 4) + (prior * ((aw or 36) + (asp or 4)))
+        end
+    else
+        anchorTo = viewer
+        if side == "START" then
+            point, relPoint = "RIGHT", "LEFT"
+            offX = -((asp or 4) + (prior * ((aw or 36) + (asp or 4))))
+        else
+            point, relPoint = "LEFT", "RIGHT"
+            offX = (asp or 4) + (prior * ((aw or 36) + (asp or 4)))
+        end
+    end
+
+    local finalOffsetX = CV_RoundPixel((((offX or 0) + fineX) or 0))
+    local finalOffsetY = CV_RoundPixel((fineY or 0))
+
+    return {
+        viewer = viewer,
+        anchorTo = anchorTo,
+        anchorPoint = point,
+        relativePoint = relPoint,
+        offsetX = finalOffsetX,
+        offsetY = finalOffsetY,
+        width = math.floor((aw or 36) + 0.5),
+        height = math.floor((ah or 36) + 0.5),
+        spacing = asp,
+        prior = prior,
+        side = side,
+        rowIndex = rowIndex,
+        row = row,
+    }
 end
 
 local _cvHoverState = {}
@@ -797,7 +1375,7 @@ _cvHoverFrame:SetScript("OnUpdate", function(self, elapsed)
         local frameName = CV_FRAME_NAMES[i]
         local frame = _G[frameName]
         local hovered = false
-        if frame and frame.IsShown and frame:IsShown() and MouseIsOver then
+        if frame and CV_SafeIsShown(frame) and MouseIsOver then
             hovered = MouseIsOver(frame) and true or false
         end
         if _cvHoverState[frameName] ~= hovered then

@@ -309,17 +309,24 @@ function MSWA_GetTextPosLabel(point)
 end
 
 -- Inline text style: no MSWA_GetDB, no MSWA_GetSpellSettings
-function MSWA_ApplyTextStyle(btn, db, s)
-    local count = btn.count
-    if not count then return end
+local function MSWA_GetResolvedTextStyle(db, s, fallbackRegion)
     local fontKey = (s and s.textFontKey) or (db and db.fontKey) or "DEFAULT"
     local path = MSWA_GetFontPathFromKey(fontKey)
-    if not path and count.GetFont then path = select(1, count:GetFont()) end
+    if not path and fallbackRegion and fallbackRegion.GetFont then
+        path = select(1, fallbackRegion:GetFont())
+    end
     local size = tonumber((s and s.textFontSize) or (db and db.textFontSize) or 12) or 12
     if size < 6 then size = 6 elseif size > 48 then size = 48 end
     local tc = (s and s.textColor) or (db and db.textColor)
     local r, g, b = 1, 1, 1
     if tc then r = tonumber(tc.r) or 1; g = tonumber(tc.g) or 1; b = tonumber(tc.b) or 1 end
+    return path, size, r, g, b
+end
+
+function MSWA_ApplyTextStyle(btn, db, s)
+    local count = btn.count
+    if not count then return end
+    local path, size, r, g, b = MSWA_GetResolvedTextStyle(db, s, count)
     local point = (s and s.textPoint) or (db and db.textPoint) or "BOTTOMRIGHT"
     local off = TEXT_POINT_OFFSETS[point] or TEXT_POINT_OFFSETS.BOTTOMRIGHT
     if path then count:SetFont(path, size, "OUTLINE") end
@@ -439,6 +446,22 @@ local function FindCooldownText(cd)
     return nil
 end
 
+local function ApplyCooldownTextStyle(btn, s, db, cdText, r, g, b)
+    if not btn or not cdText then return end
+    local path, size, baseR, baseG, baseB = MSWA_GetResolvedTextStyle(db, s, cdText)
+    local styleKey = tostring(path or "") .. ":" .. tostring(size or "")
+    if btn._mswaCooldownTextStyleKey ~= styleKey then
+        btn._mswaCooldownTextStyleKey = styleKey
+        if path then cdText:SetFont(path, size, "OUTLINE") end
+    end
+    local cr, cg, cb = r or baseR, g or baseG, b or baseB
+    local colorKey = tostring(cr) .. ":" .. tostring(cg) .. ":" .. tostring(cb)
+    if btn._mswaCooldownTextColorKey ~= colorKey then
+        btn._mswaCooldownTextColorKey = colorKey
+        cdText:SetTextColor(cr, cg, cb, 1)
+    end
+end
+
 function MSWA_ApplyConditionalTextColor_Fast(btn, s, db, remaining, isOnCooldown)
     local baseTC = (s and s.textColor) or (db and db.textColor)
     local fr, fg, fb = 1, 1, 1
@@ -459,13 +482,13 @@ function MSWA_ApplyConditionalTextColor_Fast(btn, s, db, remaining, isOnCooldown
     end
     if btn.cooldown then
         local cdText = btn._mswaCDText
-        if cdText == nil then
+        if cdText == nil or cdText == false or (cdText and cdText.GetParent and cdText:GetParent() ~= btn.cooldown and cdText:GetParent() ~= btn) then
             cdText = FindCooldownText(btn.cooldown)
             btn._mswaCDText = cdText or false
-        elseif cdText == false then
-            cdText = nil
         end
-        if cdText then cdText:SetTextColor(fr, fg, fb, 1) end
+        if cdText and cdText ~= false then
+            ApplyCooldownTextStyle(btn, s, db, cdText, fr, fg, fb)
+        end
     end
     -- Also color the decimal timer overlay (shown when showDecimal is on)
     if btn._msaDecimalTimer and btn._msaDecimalTimer:IsShown() then

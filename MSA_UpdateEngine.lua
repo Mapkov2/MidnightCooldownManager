@@ -66,10 +66,36 @@ engineFrame:Hide()
 
 local dirty              = false
 local autoBuffActive     = false
-local needsTimerTick     = false   -- true ONLY when time-dependent visuals need per-tick updates
+local needsTimerTick     = false   -- retained for compat; timer visuals now use dedicated lightweight tickers
 local lastFullUpdate     = 0
 local forceImmediate     = false
 local lastActiveCount    = 0
+local nextSyntheticWake  = 0
+local requestPending     = false
+
+local visualTickFrame    = CreateFrame("Frame", "MSWA_VisualTickFrame", UIParent)
+local visualTickCount    = 0
+local visualTickList     = {}
+local visualTickElapsed  = 0
+local VISUAL_TICK_RATE   = 0.05
+
+local function GetVisualTimerBucket(seconds, useFineBucket)
+    if not seconds or seconds <= 0 then return 0 end
+    if useFineBucket and seconds < 10 then
+        return math.floor((seconds * 10) + 0.0001)
+    end
+    return math.floor(seconds)
+end
+
+local function QueueSyntheticWakeCandidate(currentWake, wakeAt)
+    if type(wakeAt) ~= "number" or wakeAt <= 0 then return currentWake end
+    if currentWake == 0 or wakeAt < currentWake then
+        return wakeAt
+    end
+    return currentWake
+end
+
+visualTickFrame:Hide()
 
 -----------------------------------------------------------
 -- Forward-declared
@@ -108,7 +134,80 @@ end
 -- PositionButton (top-level, zero closure allocation)
 -----------------------------------------------------------
 
+local function RestoreButtonParent(btn, frame, key)
+    if not btn then return end
+    btn._msaLastAttachLayout = nil
+    local desired = frame or MSWA.frame or UIParent
+    if btn.GetParent and btn:GetParent() ~= desired then
+        btn:SetParent(desired)
+    end
+    if desired and desired.GetFrameStrata and btn.SetFrameStrata then
+        btn:SetFrameStrata(desired:GetFrameStrata())
+    end
+    if desired and desired.GetFrameLevel and btn.SetFrameLevel then
+        btn:SetFrameLevel((desired:GetFrameLevel() or 0) + 1)
+    end
+    if key and type(MSWA_HideEssentialAttachHost) == "function" then
+        MSWA_HideEssentialAttachHost(key)
+    elseif key and type(MSWA_UnregisterActiveEssentialAttachment) == "function" then
+        MSWA_UnregisterActiveEssentialAttachment(key)
+    end
+    btn._msaEssentialAttachHost = nil
+end
+
+local function CanRepositionButton(btn, key)
+    return not (btn and btn._mswaLiveDragging and btn.spellID == key)
+end
+
 local function PositionButton(btn, s, key, idx, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+    if s and s.attachToEssential and MSWA_IsTrinketKey and MSWA_IsTrinketKey(key) and type(MSWA_GetAttachedTrinketLayout) == "function" then
+        local layout = MSWA_GetAttachedTrinketLayout(key)
+        if layout and (layout.anchorTo == btn or layout.viewer == btn) then
+            layout = nil
+        end
+        if not (layout and layout.viewer) then
+            local last = btn._msaLastAttachLayout
+            if last and last.viewer and last.anchorTo ~= btn and last.viewer ~= btn then
+                layout = last
+            end
+        end
+        if layout and layout.viewer then
+            local aw = layout.width or ICON_SIZE
+            local ah = layout.height or ICON_SIZE
+            local viewer = layout.viewer
+            local anchorTo = layout.anchorTo or viewer
+            if anchorTo == btn then anchorTo = viewer end
+            local levelSource = anchorTo or viewer
+
+            if btn.GetParent and btn:GetParent() ~= viewer then
+                btn:SetParent(viewer)
+            end
+            if viewer and viewer.GetFrameStrata and btn.SetFrameStrata then
+                btn:SetFrameStrata(viewer:GetFrameStrata())
+            end
+            if levelSource and levelSource.GetFrameLevel and btn.SetFrameLevel then
+                btn:SetFrameLevel((levelSource:GetFrameLevel() or 0) + 2)
+            elseif viewer and viewer.GetFrameLevel and btn.SetFrameLevel then
+                btn:SetFrameLevel((viewer:GetFrameLevel() or 0) + 2)
+            end
+            btn._msaEssentialAttachHost = nil
+            btn._msaLastAttachLayout = layout
+            btn:ClearAllPoints()
+            btn:SetPoint(layout.anchorPoint or "LEFT", anchorTo, layout.relativePoint or "RIGHT", layout.offsetX or 0, layout.offsetY or 0)
+            btn:SetSize(aw or ICON_SIZE, ah or ICON_SIZE)
+            if type(MSWA_RegisterActiveEssentialAttachment) == "function" then
+                MSWA_RegisterActiveEssentialAttachment(key, layout)
+            end
+            if type(MSWA_ApplyEssentialAttachStyle) == "function" then MSWA_ApplyEssentialAttachStyle(btn, true) end
+            return
+        end
+    end
+
+    if btn._msaEssentialAttached and type(MSWA_ApplyEssentialAttachStyle) == "function" then
+        MSWA_ApplyEssentialAttachStyle(btn, false)
+    end
+    RestoreButtonParent(btn, frame, key)
+
     local gid = MSWA_GetAuraGroup and MSWA_GetAuraGroup(key) or (_G.GetAuraGroup and _G.GetAuraGroup(key) or nil)
     local group = gid and db.groups and db.groups[gid] or nil
 
@@ -208,6 +307,10 @@ local function IsItemZeroCount(s, itemID)
 end
 
 local function HideButton(btn)
+    if btn and btn.spellID and type(MSWA_UnregisterActiveEssentialAttachment) == "function" then
+        MSWA_UnregisterActiveEssentialAttachment(btn.spellID)
+    end
+    if btn then btn._msaLastAttachLayout = nil end
     btn:Hide()
     btn.icon:SetTexture(nil)
     btn._msaCachedKey = nil
@@ -226,6 +329,12 @@ end
 -----------------------------------------------------------
 
 local function SetIconTexture(btn, key)
+    if btn and btn.spellID ~= nil and btn.spellID ~= key then
+        if btn._msaEssentialAttached and type(MSWA_ApplyEssentialAttachStyle) == "function" then
+            MSWA_ApplyEssentialAttachStyle(btn, false)
+        end
+        RestoreButtonParent(btn, MSWA.frame or UIParent, btn.spellID)
+    end
     if btn._msaCachedKey == key then return end
     btn._msaCachedKey = key
     btn.icon:SetTexture(MSWA_GetIconForKey(key))
@@ -288,6 +397,205 @@ local function _itemCDRemaining(start, duration, now)
     return 0
 end
 
+local function ClearDecimalTimer(btn)
+    if not btn then return end
+    if btn._msaDecimalTimer then
+        btn._msaDecimalTimer:Hide()
+        btn._msaDecimalTimer._msaLastBucket = nil
+    end
+    local cd = btn.cooldown
+    if cd and cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(false) end
+end
+
+local function ClearVisualTickList()
+    for i = 1, visualTickCount do
+        local btn = visualTickList[i]
+        if btn then btn._msaVisualTickQueued = nil end
+        visualTickList[i] = nil
+    end
+    visualTickCount = 0
+    visualTickElapsed = 0
+end
+
+local function QueueVisualTick(btn)
+    if not btn or btn._msaVisualTickQueued then return end
+    visualTickCount = visualTickCount + 1
+    visualTickList[visualTickCount] = btn
+    btn._msaVisualTickQueued = true
+end
+
+local function GetStoredCooldownRemaining(cd, now)
+    if not cd or not cd.__mswaSet or not cd.__mswaDur then return 0, false end
+
+    local _issv = _G.issecretvalue
+    local exp = cd.__mswaExp
+    local dur = cd.__mswaDur
+    local st  = cd.__mswaStart
+
+    if _issv and ((exp and _issv(exp)) or (st and _issv(st)) or _issv(dur)) then
+        return -1, true
+    end
+
+    if not dur or dur <= 1.5 then return 0, false end
+
+    local remaining = 0
+    if exp ~= nil then
+        remaining = exp - now
+    elseif st ~= nil then
+        remaining = (st + dur) - now
+    end
+    if remaining < 0 then remaining = 0 end
+    return remaining, true
+end
+
+local function ApplyDecimalTimerText(btn, bs, db, remaining)
+    if not btn then return end
+    if not btn._msaDecimalTimer then
+        btn._msaDecimalTimer = btn:CreateFontString(nil, "OVERLAY")
+        btn._msaDecimalTimer:SetPoint("CENTER", btn, "CENTER", 0, 0)
+    end
+
+    local fontKey = (bs and bs.textFontKey) or (db and db.fontKey) or "DEFAULT"
+    local fontPath = MSWA_GetFontPathFromKey and MSWA_GetFontPathFromKey(fontKey) or STANDARD_TEXT_FONT
+    local fontSize = tonumber(bs and bs.textFontSize) or tonumber(db and db.textFontSize) or 12
+    local tc = (bs and bs.textColor) or (db and db.textColor)
+    local r, g, b = 1, 1, 1
+    if tc then
+        r = tonumber(tc.r) or 1
+        g = tonumber(tc.g) or 1
+        b = tonumber(tc.b) or 1
+    end
+
+    local timerFS = btn._msaDecimalTimer
+    if timerFS._msaFontPath ~= fontPath or timerFS._msaFontSize ~= fontSize then
+        timerFS._msaFontPath = fontPath
+        timerFS._msaFontSize = fontSize
+        timerFS:SetFont(fontPath, fontSize, "OUTLINE")
+    end
+    if timerFS._msaColorR ~= r or timerFS._msaColorG ~= g or timerFS._msaColorB ~= b then
+        timerFS._msaColorR = r
+        timerFS._msaColorG = g
+        timerFS._msaColorB = b
+        timerFS:SetTextColor(r, g, b, 1)
+    end
+
+    local bucket = GetVisualTimerBucket(remaining, true)
+    if timerFS._msaLastBucket ~= bucket then
+        timerFS._msaLastBucket = bucket
+        local txt = MSWA_FormatTimer(remaining, true)
+        if timerFS._msaLastText ~= txt then
+            timerFS._msaLastText = txt
+            timerFS:SetText(txt)
+        end
+    end
+    timerFS:Show()
+
+    local cd = btn.cooldown
+    if cd and cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(true) end
+end
+
+local function UpdateVisualTick(now, db, settingsTable)
+    local newCount = 0
+
+    for i = 1, visualTickCount do
+        local btn = visualTickList[i]
+        if btn then btn._msaVisualTickQueued = nil end
+
+        if btn and btn:IsShown() and btn.spellID then
+            local key = btn.spellID
+            local bs = settingsTable[key] or settingsTable[tostring(key)]
+            if bs and bs.displayType ~= "BAR" then
+                local cd = btn.cooldown
+                local remaining, validTiming = GetStoredCooldownRemaining(cd, now)
+                local isOnCooldown = validTiming and remaining > 0
+                local needGlow = bs.glow and bs.glow.enabled
+                local needText2 = bs.textColor2Enabled and bs.textColor2
+                local needDecimal = bs.showDecimal == true
+
+                if isOnCooldown and (needGlow or needText2 or needDecimal) then
+                    newCount = newCount + 1
+                    visualTickList[newCount] = btn
+                    btn._msaVisualTickQueued = true
+
+                    local fineBucket = needDecimal
+                    if not fineBucket and needGlow then
+                        local cond = bs.glow and bs.glow.condition
+                        local val = tonumber(bs.glow and bs.glow.conditionValue) or 0
+                        if (cond == "TIMER_BELOW" or cond == "TIMER_ABOVE") and val < 10 then
+                            fineBucket = true
+                        end
+                    end
+                    if not fineBucket and needText2 then
+                        local cond = bs.textColor2Cond or "TIMER_BELOW"
+                        local val = tonumber(bs.textColor2Value) or 0
+                        if (cond == "TIMER_BELOW" or cond == "TIMER_ABOVE") and val < 10 then
+                            fineBucket = true
+                        end
+                    end
+
+                    local visualBucket = GetVisualTimerBucket(remaining, fineBucket)
+                    if btn._msaVisualBucket ~= visualBucket or btn._msaVisualOnCooldown ~= true then
+                        btn._msaVisualBucket = visualBucket
+                        btn._msaVisualOnCooldown = true
+
+                        if needDecimal then
+                            ApplyDecimalTimerText(btn, bs, db, remaining)
+                        else
+                            ClearDecimalTimer(btn)
+                        end
+
+                        if needGlow then
+                            MSWA_UpdateGlow_Fast(btn, bs.glow, remaining, true)
+                        elseif btn._msaGlowActive then
+                            MSWA_StopGlow(btn)
+                        end
+
+                        if needText2 then
+                            MSWA_ApplyConditionalTextColor_Fast(btn, bs, db, remaining, true)
+                        else
+                            MSWA_ApplyConditionalTextColor_Fast(btn, bs, db, 0, false)
+                        end
+                    end
+                else
+                    btn._msaVisualBucket = nil
+                    btn._msaVisualOnCooldown = nil
+                    ClearDecimalTimer(btn)
+                    if btn._msaGlowActive then MSWA_StopGlow(btn) end
+                    if bs then MSWA_ApplyConditionalTextColor_Fast(btn, bs, db, 0, false) end
+                end
+            else
+                ClearDecimalTimer(btn)
+            end
+        end
+    end
+
+    for i = newCount + 1, visualTickCount do
+        visualTickList[i] = nil
+    end
+    visualTickCount = newCount
+
+    if visualTickCount > 0 then
+        visualTickFrame:Show()
+    else
+        visualTickFrame:Hide()
+    end
+end
+
+visualTickFrame:SetScript("OnUpdate", function(self, elapsed)
+    if visualTickCount <= 0 then
+        self:Hide()
+        return
+    end
+    if dirty or autoBuffActive then return end
+
+    visualTickElapsed = visualTickElapsed + (elapsed or 0)
+    if visualTickElapsed < VISUAL_TICK_RATE then return end
+    visualTickElapsed = 0
+
+    local db = MSWA_GetDB()
+    UpdateVisualTick(GetTime(), db, db.spellSettings or {})
+end)
+
 -----------------------------------------------------------
 -- UpdateSpells (the main hot loop)
 -----------------------------------------------------------
@@ -305,6 +613,9 @@ local function MSWA_UpdateSpells()
     local previewMode   = MSWA.previewMode
     local autoBuff      = MSWA._autoBuff
     local icons         = MSWA.icons
+
+    ClearVisualTickList()
+    if MSWA_BeginCDMAuraCycle then MSWA_BeginCDMAuraCycle() end
 
     -- v5: cache GetTime once for entire update
     local now = GetTime()
@@ -336,6 +647,7 @@ local function MSWA_UpdateSpells()
     local foundCooldownActive  = false
     local foundAutoBuffActive  = false
     local foundNeedsTimerTick  = false
+    local foundNextSyntheticWake = 0
 
     -----------------------------------------------------------
     -- 1) Spells
@@ -371,7 +683,8 @@ local function MSWA_UpdateSpells()
                         SetIconTexture(btn, key)
                         btn:Show()
                         btn.spellID = key
-                        btn:ClearAllPoints()
+                        local canPosition = CanRepositionButton(btn, key)
+                        if canPosition then btn:ClearAllPoints() end
 
                         ApplyStylesIfDirty(btn, db, s, key)
 
@@ -393,6 +706,7 @@ local function MSWA_UpdateSpells()
                                 if (now - ab.startTime) < totalWindow then
                                     inBuffPhase = true
                                     foundAutoBuffActive = true; foundNeedsTimerTick = true
+                                    foundNextSyntheticWake = QueueSyntheticWakeCandidate(foundNextSyntheticWake, ab.startTime + totalWindow)
                                 else
                                     ab.active = false
                                 end
@@ -400,7 +714,7 @@ local function MSWA_UpdateSpells()
 
                             if inBuffPhase then
                                 -- === BUFF PHASE (identical for AUTOBUFF & BUFF_THEN_CD) ===
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 MSWA_ApplyCooldownFrame(btn.cooldown, timerStart, buffDur, 1)
                                 btn.icon:SetDesaturated(false)
                                 btn:SetAlpha(ComputeAlpha(s, true, inCombat))
@@ -421,7 +735,7 @@ local function MSWA_UpdateSpells()
 
                             elseif isBuffThenCD then
                                 -- === BUFF_THEN_CD: buff expired -> show remaining spell CD ===
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
 
                                 local cdInfo = C_Spell.GetSpellCooldown(spellID)
                                 if cdInfo then
@@ -454,8 +768,7 @@ local function MSWA_UpdateSpells()
                                     local rem = 0
                                     local gs2 = s.glow
                                     if (gs2 and gs2.enabled) or s.textColor2Enabled then
-                                        foundNeedsTimerTick = true
-                                        local r = select(1, MSWA_GetSpellGlowRemaining(spellID))
+                                                        local r = select(1, MSWA_GetSpellGlowRemaining(spellID))
                                         if type(r) == "number" and r > 0 then
                                             rem = r
                                         end
@@ -486,7 +799,7 @@ local function MSWA_UpdateSpells()
                                 end
 
                             elseif previewMode or key == selectedKey then
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 MSWA_ClearCooldownFrame(btn.cooldown)
                                 btn.icon:SetDesaturated(false)
                                 btn:SetAlpha(ComputeAlpha(s, false, inCombat))
@@ -514,6 +827,7 @@ local function MSWA_UpdateSpells()
                                 if (now - ab.startTime) < totalWindow then
                                     inBuffPhase = true
                                     foundAutoBuffActive = true; foundNeedsTimerTick = true
+                                    foundNextSyntheticWake = QueueSyntheticWakeCandidate(foundNextSyntheticWake, ab.startTime + totalWindow)
                                 else
                                     ab.active = false
                                 end
@@ -521,7 +835,7 @@ local function MSWA_UpdateSpells()
 
                             if not inBuffPhase then
                                 -- BUFF MISSING -> show reminder
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 MSWA_ClearCooldownFrame(btn.cooldown)
                                 btn.icon:SetDesaturated(false)
                                 btn:SetAlpha(ComputeAlpha(s, false, inCombat))
@@ -539,7 +853,7 @@ local function MSWA_UpdateSpells()
 
                             elseif s.reminderShowTimer then
                                 -- BUFF ACTIVE + show countdown timer
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 local timerStart = ab.startTime + buffDelay
                                 MSWA_ApplyCooldownFrame(btn.cooldown, timerStart, buffDur, 1)
                                 btn.icon:SetDesaturated(false)
@@ -562,7 +876,7 @@ local function MSWA_UpdateSpells()
 
                             elseif previewMode or key == selectedKey then
                                 -- Preview: show idle
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 MSWA_ClearCooldownFrame(btn.cooldown)
                                 btn.icon:SetDesaturated(false)
                                 btn:SetAlpha(ComputeAlpha(s, false, inCombat))
@@ -590,7 +904,7 @@ local function MSWA_UpdateSpells()
                             local recharging = MSWA_ChargeRechargeTick(key, s, now)
                             local rem = ch.remaining
 
-                            PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                            if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
 
                             -- Cooldown swipe: show recharge timer (skip in forceShow)
                             if not forceShow and recharging and ch.rechargeStart > 0 then
@@ -631,6 +945,7 @@ local function MSWA_UpdateSpells()
                             if not forceShow and recharging then
                                 MSWA_ApplySwipeDarken_Fast(btn, s)
                                 foundAutoBuffActive = true; foundNeedsTimerTick = true
+                                foundNextSyntheticWake = QueueSyntheticWakeCandidate(foundNextSyntheticWake, ch.rechargeStart + (tonumber(s.chargeDuration) or 0))
                             end
                             index = index + 1
 
@@ -641,7 +956,7 @@ local function MSWA_UpdateSpells()
                             if showMe and buffActive and ShouldHideByThreshold(s, auraData, now) then showMe = false end
 
                             if showMe then
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 if buffActive then
                                     MSWA_ApplyAuraCooldown(btn.cooldown, auraData)
                                     if s.showStacks ~= false and not (s.hideStacksOnCooldown and MSWA_IsCooldownActive(btn)) then
@@ -668,7 +983,7 @@ local function MSWA_UpdateSpells()
 
                         else
                             -- ========== NORMAL SPELL MODE ==========
-                            PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                            if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
 
                             local cdInfo = C_Spell.GetSpellCooldown(spellID)
                             if cdInfo then
@@ -700,8 +1015,7 @@ local function MSWA_UpdateSpells()
                             if onCD and s then
                                 local gs2 = s.glow
                                 if (gs2 and gs2.enabled) or s.textColor2Enabled then
-                                        foundNeedsTimerTick = true
-                                    local r = select(1, MSWA_GetSpellGlowRemaining(spellID))
+                                                    local r = select(1, MSWA_GetSpellGlowRemaining(spellID))
                                     if type(r) == "number" and r > 0 then
                                         rem = r
                                     end
@@ -729,13 +1043,16 @@ local function MSWA_UpdateSpells()
                     local key = trackedKey
                     local s   = settingsTable[key] or settingsTable[tostring(key)]
                     local shouldLoad = MSWA_ShouldLoadAura(s, inCombat, inEncounter)
+                    local showSelection = previewMode or key == selectedKey
+                    local suppressEmptyAttachedTrinket = isTrinket and s and s.attachToEssential and not itemID and not showSelection
 
-                    if shouldLoad or previewMode or key == selectedKey then
+                    if (shouldLoad or showSelection) and not suppressEmptyAttachedTrinket then
                         local btn = icons[index]
                         SetIconTexture(btn, key)
                         btn:Show()
                         btn.spellID = key
-                        btn:ClearAllPoints()
+                        local canPosition = CanRepositionButton(btn, key)
+                        if canPosition then btn:ClearAllPoints() end
 
                         ApplyStylesIfDirty(btn, db, s, key)
 
@@ -749,7 +1066,7 @@ local function MSWA_UpdateSpells()
                             local showMe = buffActive or s.showWhenAbsent or previewMode or key == selectedKey
                             if showMe and buffActive and ShouldHideByThreshold(s, auraData, now) then showMe = false end
                             if showMe then
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 if buffActive then
                                     MSWA_ApplyAuraCooldown(btn.cooldown, auraData)
                                     if s.showStacks ~= false and not (s.hideStacksOnCooldown and MSWA_IsCooldownActive(btn)) then
@@ -785,13 +1102,14 @@ local function MSWA_UpdateSpells()
                                 if (now - ab.startTime) < totalWindow then
                                     inBuffPhase = true
                                     foundAutoBuffActive = true; foundNeedsTimerTick = true
+                                    foundNextSyntheticWake = QueueSyntheticWakeCandidate(foundNextSyntheticWake, ab.startTime + totalWindow)
                                 else
                                     ab.active = false
                                 end
                             end
 
                             if inBuffPhase then
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 MSWA_ApplyCooldownFrame(btn.cooldown, timerStart, buffDur, 1)
                                 btn.icon:SetDesaturated(false)
                                 if IsItemZeroCount(s, itemID) then btn.icon:SetDesaturated(true) end
@@ -813,7 +1131,7 @@ local function MSWA_UpdateSpells()
 
                             elseif isBuffThenCD then
                                 -- === BUFF_THEN_CD: buff expired -> show remaining item CD ===
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
 
                                 if itemID and GetItemCooldown then
                                     local iStart, iDuration = GetItemCooldown(itemID)
@@ -844,7 +1162,7 @@ local function MSWA_UpdateSpells()
 
                                     local rem = 0
                                     local need = (s.glow and s.glow.enabled) or s.textColor2Enabled
-                                    if need then foundNeedsTimerTick = true end
+                                    -- icon timer visuals handled by visualTickFrame
                                     if need and itemID and GetItemCooldown then
                                         local st, dur = GetItemCooldown(itemID)
                                         local ok2, r = pcall(_itemCDRemaining, st, dur, now)
@@ -880,7 +1198,7 @@ local function MSWA_UpdateSpells()
                                 end
 
                             elseif previewMode or key == selectedKey then
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 MSWA_ClearCooldownFrame(btn.cooldown)
                                 btn.icon:SetDesaturated(false)
                                 if IsItemZeroCount(s, itemID) then btn.icon:SetDesaturated(true) end
@@ -890,7 +1208,7 @@ local function MSWA_UpdateSpells()
                                 index = index + 1
                             else
                                 if IsItemZeroCount(s, itemID) then
-                                    PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                    if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                     MSWA_ClearCooldownFrame(btn.cooldown)
                                     btn.icon:SetDesaturated(true)
                                     btn:SetAlpha(ComputeAlpha(s, false, inCombat))
@@ -914,13 +1232,14 @@ local function MSWA_UpdateSpells()
                                 if (now - ab.startTime) < totalWindow then
                                     inBuffPhase = true
                                     foundAutoBuffActive = true; foundNeedsTimerTick = true
+                                    foundNextSyntheticWake = QueueSyntheticWakeCandidate(foundNextSyntheticWake, ab.startTime + totalWindow)
                                 else
                                     ab.active = false
                                 end
                             end
 
                             if not inBuffPhase then
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 MSWA_ClearCooldownFrame(btn.cooldown)
                                 btn.icon:SetDesaturated(false)
                                 if IsItemZeroCount(s, itemID) then btn.icon:SetDesaturated(true) end
@@ -938,7 +1257,7 @@ local function MSWA_UpdateSpells()
                                 index = index + 1
 
                             elseif s.reminderShowTimer then
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 local timerStart = ab.startTime + buffDelay
                                 MSWA_ApplyCooldownFrame(btn.cooldown, timerStart, buffDur, 1)
                                 btn.icon:SetDesaturated(false)
@@ -961,7 +1280,7 @@ local function MSWA_UpdateSpells()
                                 index = index + 1
 
                             elseif previewMode or key == selectedKey then
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 MSWA_ClearCooldownFrame(btn.cooldown)
                                 btn.icon:SetDesaturated(false)
                                 btn:SetAlpha(ComputeAlpha(s, false, inCombat))
@@ -986,7 +1305,7 @@ local function MSWA_UpdateSpells()
                                 local recharging = MSWA_ChargeRechargeTick(key, s, now)
                                 local rem = ch.remaining
 
-                                PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                                if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                                 if recharging and ch.rechargeStart > 0 then
                                     local dur = tonumber(s.chargeDuration) or 0
                                     MSWA_ApplyCooldownFrame(btn.cooldown, ch.rechargeStart, dur, 1)
@@ -1015,11 +1334,12 @@ local function MSWA_UpdateSpells()
                                 if recharging then
                                     MSWA_ApplySwipeDarken_Fast(btn, s)
                                     foundAutoBuffActive = true; foundNeedsTimerTick = true
+                                    foundNextSyntheticWake = QueueSyntheticWakeCandidate(foundNextSyntheticWake, ch.rechargeStart + (tonumber(s.chargeDuration) or 0))
                                 end
                                 index = index + 1
                             else
                             -- ========== ITEM INSTANCE: NORMAL COOLDOWN MODE ==========
-                            PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                            if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
 
                             if itemID and GetItemCooldown then
                                 local iStart, iDuration = GetItemCooldown(itemID)
@@ -1053,7 +1373,7 @@ local function MSWA_UpdateSpells()
                             local rem = 0
                             if onCD and s then
                                 local need = (s.glow and s.glow.enabled) or s.textColor2Enabled
-                                    if need then foundNeedsTimerTick = true end
+                                    -- icon timer visuals handled by visualTickFrame
                                 if need and itemID and GetItemCooldown then
                                     local st, dur = GetItemCooldown(itemID)
                                     local ok2, r = pcall(_itemCDRemaining, st, dur, now)
@@ -1083,8 +1403,9 @@ local function MSWA_UpdateSpells()
                     SetIconTexture(btn, trackedKey)
                     btn:Show()
                     btn.spellID = trackedKey
-                    btn:ClearAllPoints()
-                    PositionButton(btn, s, trackedKey, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                    local canPosition = CanRepositionButton(btn, trackedKey)
+                    if canPosition then btn:ClearAllPoints() end
+                    if canPosition then PositionButton(btn, s, trackedKey, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                     MSWA_ClearCooldownFrame(btn.cooldown)
                     ApplyStylesIfDirty(btn, db, s, trackedKey)
                     btn.icon:SetDesaturated(false)
@@ -1112,7 +1433,8 @@ local function MSWA_UpdateSpells()
                 SetIconTexture(btn, key)
                 btn:Show()
                 btn.spellID = key
-                btn:ClearAllPoints()
+                local canPosition = CanRepositionButton(btn, key)
+                if canPosition then btn:ClearAllPoints() end
 
                 ApplyStylesIfDirty(btn, db, s, key)
 
@@ -1125,7 +1447,7 @@ local function MSWA_UpdateSpells()
                     local auraData, buffActive = MSWA_ResolveBuffAura(s, itemID)
                     local showMe = buffActive or s.showWhenAbsent or previewMode or key == selectedKey
                     if showMe then
-                        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                        if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                         if buffActive then
                             MSWA_ApplyAuraCooldown(btn.cooldown, auraData)
                             if s.showStacks ~= false and not (s.hideStacksOnCooldown and MSWA_IsCooldownActive(btn)) then
@@ -1161,13 +1483,14 @@ local function MSWA_UpdateSpells()
                         if (now - ab.startTime) < totalWindow then
                             inBuffPhase = true
                             foundAutoBuffActive = true; foundNeedsTimerTick = true
+                            foundNextSyntheticWake = QueueSyntheticWakeCandidate(foundNextSyntheticWake, ab.startTime + totalWindow)
                         else
                             ab.active = false
                         end
                     end
 
                     if inBuffPhase then
-                        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                        if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                         MSWA_ApplyCooldownFrame(btn.cooldown, timerStart, buffDur, 1)
                         btn.icon:SetDesaturated(false)
                         if IsItemZeroCount(s, itemID) then btn.icon:SetDesaturated(true) end
@@ -1189,7 +1512,7 @@ local function MSWA_UpdateSpells()
 
                     elseif isBuffThenCD then
                         -- === BUFF_THEN_CD: buff expired -> show remaining item CD ===
-                        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                        if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
 
                         if itemID and GetItemCooldown then
                             local iStart, iDuration = GetItemCooldown(itemID)
@@ -1220,7 +1543,7 @@ local function MSWA_UpdateSpells()
 
                             local rem = 0
                             local need = (s.glow and s.glow.enabled) or s.textColor2Enabled
-                                    if need then foundNeedsTimerTick = true end
+                                    -- icon timer visuals handled by visualTickFrame
                             if need and itemID and GetItemCooldown then
                                 local st, dur = GetItemCooldown(itemID)
                                 local ok2, r = pcall(_itemCDRemaining, st, dur, now)
@@ -1256,7 +1579,7 @@ local function MSWA_UpdateSpells()
                         end
 
                     elseif previewMode or key == selectedKey then
-                        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                        if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                         MSWA_ClearCooldownFrame(btn.cooldown)
                         btn.icon:SetDesaturated(false)
                         if IsItemZeroCount(s, itemID) then btn.icon:SetDesaturated(true) end
@@ -1266,7 +1589,7 @@ local function MSWA_UpdateSpells()
                         index = index + 1
                     else
                         if IsItemZeroCount(s, itemID) then
-                            PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                            if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                             MSWA_ClearCooldownFrame(btn.cooldown)
                             btn.icon:SetDesaturated(true)
                             btn:SetAlpha(ComputeAlpha(s, false, inCombat))
@@ -1290,13 +1613,14 @@ local function MSWA_UpdateSpells()
                         if (now - ab.startTime) < totalWindow then
                             inBuffPhase = true
                             foundAutoBuffActive = true; foundNeedsTimerTick = true
+                            foundNextSyntheticWake = QueueSyntheticWakeCandidate(foundNextSyntheticWake, ab.startTime + totalWindow)
                         else
                             ab.active = false
                         end
                     end
 
                     if not inBuffPhase then
-                        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                        if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                         MSWA_ClearCooldownFrame(btn.cooldown)
                         btn.icon:SetDesaturated(false)
                         if IsItemZeroCount(s, itemID) then btn.icon:SetDesaturated(true) end
@@ -1314,7 +1638,7 @@ local function MSWA_UpdateSpells()
                         index = index + 1
 
                     elseif s.reminderShowTimer then
-                        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                        if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                         local timerStart = ab.startTime + buffDelay
                         MSWA_ApplyCooldownFrame(btn.cooldown, timerStart, buffDur, 1)
                         btn.icon:SetDesaturated(false)
@@ -1337,7 +1661,7 @@ local function MSWA_UpdateSpells()
                         index = index + 1
 
                     elseif previewMode or key == selectedKey then
-                        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                        if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                         MSWA_ClearCooldownFrame(btn.cooldown)
                         btn.icon:SetDesaturated(false)
                         btn:SetAlpha(ComputeAlpha(s, false, inCombat))
@@ -1362,7 +1686,7 @@ local function MSWA_UpdateSpells()
                         local recharging = MSWA_ChargeRechargeTick(key, s, now)
                         local rem = ch.remaining
 
-                        PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                        if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
                         if recharging and ch.rechargeStart > 0 then
                             local dur = tonumber(s.chargeDuration) or 0
                             MSWA_ApplyCooldownFrame(btn.cooldown, ch.rechargeStart, dur, 1)
@@ -1391,11 +1715,12 @@ local function MSWA_UpdateSpells()
                         if recharging then
                             MSWA_ApplySwipeDarken_Fast(btn, s)
                             foundAutoBuffActive = true; foundNeedsTimerTick = true
+                            foundNextSyntheticWake = QueueSyntheticWakeCandidate(foundNextSyntheticWake, ch.rechargeStart + (tonumber(s.chargeDuration) or 0))
                         end
                         index = index + 1
                     else
                     -- ========== NORMAL ITEM COOLDOWN MODE ==========
-                    PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx)
+                    if canPosition then PositionButton(btn, s, key, index, frame, ICON_SIZE, ICON_SPACE, db, groupCtx) end
 
                     if itemID and GetItemCooldown then
                         local iStart, iDuration = GetItemCooldown(itemID)
@@ -1428,7 +1753,7 @@ local function MSWA_UpdateSpells()
                     local rem = 0
                     if onCD and s then
                         local need = (s.glow and s.glow.enabled) or s.textColor2Enabled
-                                    if need then foundNeedsTimerTick = true end
+                                    -- icon timer visuals handled by visualTickFrame
                         if need and itemID and GetItemCooldown then
                             local st, dur = GetItemCooldown(itemID)
                             local ok2, r = pcall(_itemCDRemaining, st, dur, now)
@@ -1504,7 +1829,19 @@ local function MSWA_UpdateSpells()
                 local bkey = btn.spellID
                 local bs = bkey and settingsTable[bkey]
                 if bs and bs.displayType == "BAR" then
-                    local bInfo = { isActive = true, name = nil, expires = 0, duration = 0, stacks = nil, absentAlpha = 0.45, isSecret = false }
+                    local bInfo = btn._msaBarInfo
+                    if not bInfo then
+                        bInfo = { isActive = true, name = nil, expires = 0, duration = 0, stacks = nil, absentAlpha = 0.45, isSecret = false }
+                        btn._msaBarInfo = bInfo
+                    else
+                        bInfo.isActive = true
+                        bInfo.name = nil
+                        bInfo.expires = 0
+                        bInfo.duration = 0
+                        bInfo.stacks = nil
+                        bInfo.absentAlpha = 0.45
+                        bInfo.isSecret = false
+                    end
 
                     -- Name: customName > spellName > key
                     local cn = db.customNames and db.customNames[bkey]
@@ -1570,7 +1907,7 @@ local function MSWA_UpdateSpells()
                                 local tItemID = slot and MSWA_GetTrinketItemID(slot)
                                 if tItemID then
                                     local start, duration = GetItemCooldown(tItemID)
-                                    local ok2, isActive = pcall(function() return start and start > 0 and duration and duration > 1.5 end)
+                                    local ok2, isActive = pcall(_itemCDCheck, start, duration)
                                     if ok2 and isActive then
                                         bInfo.expires  = start + duration
                                         bInfo.duration = duration
@@ -1631,10 +1968,7 @@ local function MSWA_UpdateSpells()
                         end
                     end
 
-                    -- Bars need timer tick for smooth animation
-                    if bInfo.isActive ~= false and (bInfo.duration or 0) > 0 then
-                        foundNeedsTimerTick = true
-                    end
+                    -- BAR visuals are driven by MSA_Bars.lua's own lightweight ticker.
 
                     -- Item count stacks for bar display
                     if not bInfo.stacks and GetItemCount then
@@ -1659,76 +1993,45 @@ local function MSWA_UpdateSpells()
     end
 
     -----------------------------------------------------------
-    -- 2c) Icon decimal timer: custom timer text for showDecimal
-    -- Post-processing: for visible ICON-mode buttons with
-    -- showDecimal, overlay a custom timer FontString and hide
-    -- Blizzard's built-in countdown numbers.
-    -- Uses cd.__mswaExp / cd.__mswaDur stored by MSWA_ApplyCooldownFrame
-    -- (GetTime-based seconds, NOT milliseconds) - fully reliable.
+    -- 2c) Icon lightweight timer visuals
+    -- Bars use MSA_Bars.lua's ticker. Icon-only dynamic visuals
+    -- (decimal timer / glow / conditional text color) are queued
+    -- here and updated by visualTickFrame without re-running the
+    -- full aura engine every 0.1 sec.
     -----------------------------------------------------------
-    if MSWA_FormatTimer then
-        local _issv2 = _G.issecretvalue
-        for i = 1, index - 1 do
-            local btn = icons[i]
-            if btn and btn:IsShown() then
-                local bkey = btn.spellID
-                local bs = bkey and settingsTable[bkey]
-                -- Skip BAR mode (bars handle their own timer)
-                if bs and bs.displayType ~= "BAR" and bs.showDecimal then
-                    local cd = btn.cooldown
-                    local remaining = 0
+    for i = 1, index - 1 do
+        local btn = icons[i]
+        if btn and btn:IsShown() then
+            local bkey = btn.spellID
+            local bs = bkey and (settingsTable[bkey] or settingsTable[tostring(bkey)])
+            if bs and bs.displayType ~= "BAR" then
+                local cd = btn.cooldown
+                local remaining, validTiming = GetStoredCooldownRemaining(cd, now)
+                local isOnCooldown = validTiming and remaining > 0
+                local needGlow = bs.glow and bs.glow.enabled
+                local needText2 = bs.textColor2Enabled and bs.textColor2
+                local needDecimal = bs.showDecimal == true
 
-                    -- Read remaining from stored timing (set by MSWA_ApplyCooldownFrame)
-                    if cd and cd.__mswaSet and cd.__mswaDur then
-                        local exp = cd.__mswaExp
-                        local dur = cd.__mswaDur
-                        local st  = cd.__mswaStart
-
-                        -- Secret guard (NEVER arithmetic on secret values)
-                        if _issv2 and ((exp and _issv2(exp)) or (st and _issv2(st)) or _issv2(dur)) then
-                            remaining = -1  -- secret -> skip
-                        elseif dur > 1.5 then
-                            if exp ~= nil then
-                                remaining = exp - now
-                            elseif st ~= nil then
-                                remaining = (st + dur) - now
-                            end
-                            if remaining and remaining < 0 then remaining = 0 end
-                        end
+                if isOnCooldown and (needGlow or needText2 or needDecimal) then
+                    QueueVisualTick(btn)
+                    if needDecimal then
+                        ApplyDecimalTimerText(btn, bs, db, remaining)
+                    else
+                        ClearDecimalTimer(btn)
                     end
-
-                    if remaining > 0 then
-                        -- Lazy-create decimal timer FontString
-                        if not btn._msaDecimalTimer then
-                            btn._msaDecimalTimer = btn:CreateFontString(nil, "OVERLAY")
-                            btn._msaDecimalTimer:SetPoint("CENTER", btn, "CENTER", 0, 0)
-                        end
-                        -- Style: match icon text settings
-                        local fontKey = (bs.textFontKey) or (db.fontKey) or "DEFAULT"
-                        local fp = MSWA_GetFontPathFromKey and MSWA_GetFontPathFromKey(fontKey) or STANDARD_TEXT_FONT
-                        local fs = tonumber(bs.textFontSize) or tonumber(db.textFontSize) or 12
-                        local tc = bs.textColor or db.textColor
-                        local r, g, b = 1, 1, 1
-                        if tc then r = tonumber(tc.r) or 1; g = tonumber(tc.g) or 1; b = tonumber(tc.b) or 1 end
-                        btn._msaDecimalTimer:SetFont(fp, fs, "OUTLINE")
-                        btn._msaDecimalTimer:SetTextColor(r, g, b, 1)
-                        btn._msaDecimalTimer:SetText(MSWA_FormatTimer(remaining, true))
-                        btn._msaDecimalTimer:Show()
-                        -- Hide Blizzard countdown numbers
-                        if cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(true) end
-                        foundNeedsTimerTick = true
-                    elseif btn._msaDecimalTimer then
-                        btn._msaDecimalTimer:Hide()
-                        if cd and cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(false) end
-                    end
-                elseif btn._msaDecimalTimer then
-                    -- showDecimal off or bar mode: restore Blizzard numbers
-                    btn._msaDecimalTimer:Hide()
-                    local cd = btn.cooldown
-                    if cd and cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(false) end
+                else
+                    ClearDecimalTimer(btn)
                 end
+            else
+                ClearDecimalTimer(btn)
             end
         end
+    end
+
+    if visualTickCount > 0 then
+        visualTickFrame:Show()
+    else
+        visualTickFrame:Hide()
     end
 
     -----------------------------------------------------------
@@ -1738,6 +2041,7 @@ local function MSWA_UpdateSpells()
     for i = index, MAX_ICONS do
         local btn = icons[i]
         if btn.spellID ~= nil or btn:IsShown() then
+            local oldKey = btn.spellID
             btn:Hide()
             btn.icon:SetTexture(nil)
             btn._msaCachedKey = nil
@@ -1747,6 +2051,10 @@ local function MSWA_UpdateSpells()
             MSWA_HideReminderLabel(btn)
             MSWA_HideChargeLabel(btn)
             if MSWA_CleanupBar then MSWA_CleanupBar(btn) end
+            if btn._msaEssentialAttached and type(MSWA_ApplyEssentialAttachStyle) == "function" then
+                MSWA_ApplyEssentialAttachStyle(btn, false)
+            end
+            RestoreButtonParent(btn, frame, oldKey)
             btn.spellID = nil
             ClearStackAndCount(btn)
         end
@@ -1771,7 +2079,10 @@ local function MSWA_UpdateSpells()
     -- (Blizzard's CooldownFrame handles swipe natively).
     -----------------------------------------------------------
     autoBuffActive = foundAutoBuffActive
-    needsTimerTick = foundNeedsTimerTick
+    nextSyntheticWake = foundNextSyntheticWake
+    -- Full-engine timer ticks were the source of persistent 1ms spikes.
+    -- Icon visuals now use visualTickFrame and bars use MSA_Bars.lua.
+    needsTimerTick = false
 end
 
 -- Export globally
@@ -1815,22 +2126,27 @@ end
 engineFrame:SetScript("OnUpdate", function(self)
     local now = GetTime()
 
-    -- needsTimerTick: glow/textcolor conditions need periodic re-eval
     if needsTimerTick and not dirty then
         dirty = true
     end
 
-    if dirty or autoBuffActive then
-        if forceImmediate or (now - lastFullUpdate) >= THROTTLE_INTERVAL then
-            -- v5: AutoBuffTick runs at same 10 Hz rate, not every frame
-            if autoBuffActive then
-                AutoBuffTick(MSWA_GetDB().spellSettings or {}, now)
-            end
-            dirty = false
-            forceImmediate = false
-            lastFullUpdate = now
-            MSWA_UpdateSpells()
+    local shouldRun = false
+    if dirty then
+        shouldRun = forceImmediate or (now - lastFullUpdate) >= THROTTLE_INTERVAL
+    elseif autoBuffActive then
+        local wakeAt = nextSyntheticWake
+        if wakeAt and wakeAt > 0 then
+            shouldRun = now >= (wakeAt - 0.02)
+        else
+            shouldRun = (now - lastFullUpdate) >= 0.25
         end
+    end
+
+    if shouldRun then
+        dirty = false
+        forceImmediate = false
+        lastFullUpdate = now
+        MSWA_UpdateSpells()
     end
 
     if not dirty and not autoBuffActive and not needsTimerTick then
@@ -1844,12 +2160,27 @@ end)
 
 function MSWA_RequestUpdateSpells()
     dirty = true
-    engineFrame:Show()
+    if engineFrame:IsShown() or requestPending then return end
+    requestPending = true
+
+    local function FlushQueuedRequest()
+        requestPending = false
+        if dirty or autoBuffActive or needsTimerTick then
+            engineFrame:Show()
+        end
+    end
+
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0, FlushQueuedRequest)
+    else
+        FlushQueuedRequest()
+    end
 end
 
 function MSWA_ForceUpdateSpells()
     dirty = true
     forceImmediate = true
+    requestPending = false
     engineFrame:Show()
 end
 
@@ -1898,11 +2229,6 @@ MSWA_UpdateEventRegistration = function()
         mainFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")
         mainFrame:RegisterEvent("BAG_UPDATE_COOLDOWN")
         mainFrame:RegisterEvent("BAG_UPDATE")
-        if mainFrame.RegisterUnitEvent then
-            mainFrame:RegisterUnitEvent("UNIT_AURA", "player")
-        else
-            mainFrame:RegisterEvent("UNIT_AURA")
-        end
     else
         mainFrame:UnregisterEvent("SPELL_UPDATE_COOLDOWN")
         mainFrame:UnregisterEvent("PLAYER_TALENT_UPDATE")
@@ -1910,7 +2236,6 @@ MSWA_UpdateEventRegistration = function()
         mainFrame:UnregisterEvent("UNIT_INVENTORY_CHANGED")
         mainFrame:UnregisterEvent("BAG_UPDATE_COOLDOWN")
         mainFrame:UnregisterEvent("BAG_UPDATE")
-        mainFrame:UnregisterEvent("UNIT_AURA")
     end
 end
 
@@ -1931,9 +2256,6 @@ mainFrame:SetScript("OnEvent", function(self, event, arg1)
         lastActiveCount = -1
         MSWA_ForceUpdateSpells()
         MSWA_ApplyUIFont()
-    elseif event == "UNIT_AURA" then
-        if arg1 ~= "player" then return end
-        MSWA_RequestUpdateSpells()
     elseif event == "UNIT_INVENTORY_CHANGED" then
         if arg1 ~= "player" then return end
         MSWA_RequestUpdateSpells()

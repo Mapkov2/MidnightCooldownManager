@@ -136,6 +136,24 @@ function MSWA_ApplyUIFont()
     return
 end
 
+
+function MSWA_ApplyEssentialAttachStyle(btn, enabled)
+    if not btn then return end
+    if enabled then
+        btn._msaEssentialAttached = true
+        if btn.border then btn.border:SetAlpha(0) end
+        if btn.icon then btn.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93) end
+        if btn.count then btn.count:Hide() end
+        if btn.stackText then btn.stackText:Hide() end
+        return
+    end
+
+    btn._msaEssentialAttached = nil
+    if btn.border then
+        if Masque then btn.border:SetAlpha(0) else btn.border:SetAlpha(1) end
+    end
+end
+
 -----------------------------------------------------------
 -- v5: Text/Stack position presets, style helpers, and
 --     GetStackShowMode are now ONLY in MSA_SpellAPI.lua.
@@ -399,6 +417,132 @@ end
 
 MSWA.icons = {}
 
+local function MSWA_RoundPixel(v)
+    v = tonumber(v) or 0
+    return math.floor(v + (v >= 0 and 0.5 or -0.5))
+end
+
+local function MSWA_GetAttachBaseLayoutForDrag(key, settings)
+    if not (key and settings and type(MSWA_GetAttachedTrinketLayout) == "function") then return nil end
+    local oldX = settings.attachEssentialOffsetX
+    local oldY = settings.attachEssentialOffsetY
+    settings.attachEssentialOffsetX = 0
+    settings.attachEssentialOffsetY = 0
+    local layout = MSWA_GetAttachedTrinketLayout(key)
+    settings.attachEssentialOffsetX = oldX
+    settings.attachEssentialOffsetY = oldY
+    return layout
+end
+
+local function MSWA_GetAttachBaseCenterDelta(anchorTo, btn, layout)
+    if not (anchorTo and btn and layout) then return 0, 0 end
+    local bw = (btn.GetWidth and btn:GetWidth()) or (layout.width or 36)
+    local bh = (btn.GetHeight and btn:GetHeight()) or (layout.height or 36)
+    local aw = (anchorTo.GetWidth and anchorTo:GetWidth()) or (layout.width or bw or 36)
+    local point = layout.anchorPoint or "LEFT"
+    local relPoint = layout.relativePoint or "RIGHT"
+    local ox = layout.offsetX or 0
+    local oy = layout.offsetY or 0
+
+    local dx = ox
+    if point == "LEFT" and relPoint == "RIGHT" then
+        dx = (aw * 0.5) + ox + (bw * 0.5)
+    elseif point == "RIGHT" and relPoint == "LEFT" then
+        dx = -((aw * 0.5) + (bw * 0.5)) + ox
+    elseif point == "CENTER" and relPoint == "CENTER" then
+        dx = ox
+    end
+
+    local dy = oy
+    return dx, dy
+end
+
+local function MSWA_UpdateDraggedAuraSettings(self, refreshUI)
+    if not self or not self.spellID then return end
+    local opt = MSWA.optionsFrame
+    if not (opt and opt.IsShown and opt:IsShown()) then return end
+
+    local db = MSWA_GetDB()
+    db.spellSettings = db.spellSettings or {}
+    local key = self.spellID
+    local settings = db.spellSettings[key] or {}
+    local bx, by = self:GetCenter()
+    if not bx or not by then return end
+
+    if settings.attachToEssential and MSWA_IsTrinketKey and MSWA_IsTrinketKey(key) and type(MSWA_GetAttachedTrinketLayout) == "function" then
+        local baseLayout = MSWA_GetAttachBaseLayoutForDrag(key, settings)
+        local anchorTo = baseLayout and (baseLayout.anchorTo or baseLayout.viewer) or nil
+        if anchorTo and anchorTo.GetCenter then
+            local ax, ay = anchorTo:GetCenter()
+            if ax and ay then
+                local baseDx, baseDy = MSWA_GetAttachBaseCenterDelta(anchorTo, self, baseLayout)
+                settings.attachEssentialOffsetX = MSWA_RoundPixel((((bx - ax) - (baseDx or 0)) or 0))
+                settings.attachEssentialOffsetY = MSWA_RoundPixel((((by - ay) - (baseDy or 0)) or 0))
+            end
+        end
+    else
+        local gid = MSWA_GetAuraGroup and MSWA_GetAuraGroup(key)
+        local grp = gid and db.groups and db.groups[gid] or nil
+        if grp then
+            local anchorFrame = MSWA_GetAnchorFrame({ anchorFrame = grp.anchorFrame })
+            if not anchorFrame then anchorFrame = MSWA.frame end
+            local ax, ay = anchorFrame:GetCenter()
+            if not ax then ax, ay = UIParent:GetCenter() end
+            settings.x = math.floor(((bx - ax) - (grp.x or 0)) + 0.5)
+            settings.y = math.floor(((by - ay) - (grp.y or 0)) + 0.5)
+            settings.anchorFrame = nil
+        else
+            local anchorFrame = MSWA_GetAnchorFrame(settings)
+            local ax, ay = anchorFrame:GetCenter()
+            if not ax then ax, ay = UIParent:GetCenter() end
+            settings.x = math.floor((bx - ax) + 0.5)
+            settings.y = math.floor((by - ay) + 0.5)
+        end
+    end
+
+    settings.width = self:GetWidth()
+    settings.height = self:GetHeight()
+    db.spellSettings[key] = settings
+
+    local gid = MSWA_GetAuraGroup and MSWA_GetAuraGroup(key) or nil
+    if gid and type(MSWA_SyncGroupMembersFromPositions) == "function" then
+        MSWA_SyncGroupMembersFromPositions(gid)
+    end
+
+    if refreshUI and MSWA.selectedSpellID == key and type(MSWA._PositionPageRefresh) == "function" then
+        pcall(MSWA._PositionPageRefresh)
+    end
+end
+
+local function MSWA_StartIconLiveDrag(self)
+    if not self then return end
+    self._mswaLiveDragging = true
+    self._mswaLiveDragElapsed = 0
+    self:SetScript("OnUpdate", function(btn, elapsed)
+        btn._mswaLiveDragElapsed = (btn._mswaLiveDragElapsed or 0) + (elapsed or 0)
+        if btn._mswaLiveDragElapsed < 0.03 then return end
+        btn._mswaLiveDragElapsed = 0
+        MSWA_UpdateDraggedAuraSettings(btn, true)
+    end)
+end
+
+local function MSWA_StopIconLiveDrag(self, refreshUI)
+    if not self then return end
+    self._mswaLiveDragging = nil
+    self._mswaLiveDragElapsed = nil
+    self:SetScript("OnUpdate", nil)
+    MSWA_UpdateDraggedAuraSettings(self, refreshUI)
+    if type(MSWA_ForceUpdateSpells) == "function" then
+        MSWA_ForceUpdateSpells()
+    elseif type(MSWA_RequestUpdateSpells) == "function" then
+        MSWA_RequestUpdateSpells()
+    end
+end
+
+local function MSWA_IsButtonLiveDragging(btn)
+    return btn and btn._mswaLiveDragging and true or false
+end
+
 local function MSWA_CreateIcon(i)
     local btn = CreateFrame("Button", ADDON_NAME.."Icon"..i, frame)
     btn:SetSize(MSWA.ICON_SIZE, MSWA.ICON_SIZE)
@@ -462,12 +606,14 @@ btn.spellID = nil
                 end
             end
             if MSWA.selectedSpellID and self.spellID == MSWA.selectedSpellID then
+                MSWA_StartIconLiveDrag(self)
                 self:StartMoving()
                 return
             end
             if MSWA.previewMode and self.spellID then
                 MSWA.selectedSpellID = self.spellID
                 MSWA.selectedGroupID = nil
+                MSWA_StartIconLiveDrag(self)
                 self:StartMoving()
                 MSWA_RefreshOptionsList()
                 return
@@ -485,44 +631,7 @@ btn.spellID = nil
         local opt = MSWA.optionsFrame
         if opt and opt:IsShown() and MSWA.selectedSpellID and self.spellID == MSWA.selectedSpellID then
             self:StopMovingOrSizing()
-            local db = MSWA_GetDB()
-            db.spellSettings = db.spellSettings or {}
-            local key = self.spellID
-            local settings = db.spellSettings[key] or {}
-            local bx, by = self:GetCenter()
-
-            local gid = MSWA_GetAuraGroup(key)
-            local grp = gid and db.groups and db.groups[gid] or nil
-            if grp then
-                local anchorFrame = MSWA_GetAnchorFrame({ anchorFrame = grp.anchorFrame })
-                if not anchorFrame then anchorFrame = MSWA.frame end
-                local ax, ay = anchorFrame:GetCenter()
-                if not ax then ax, ay = UIParent:GetCenter() end
-                settings.x = (bx - ax) - (grp.x or 0)
-                settings.y = (by - ay) - (grp.y or 0)
-                settings.anchorFrame = nil
-            else
-                local anchorFrame = MSWA_GetAnchorFrame(settings)
-                local ax, ay = anchorFrame:GetCenter()
-                if not ax then ax, ay = UIParent:GetCenter() end
-                settings.x = bx - ax
-                settings.y = by - ay
-            end
-
-            settings.width  = self:GetWidth()
-            settings.height = self:GetHeight()
-            db.spellSettings[key] = settings
-
-            -- Keep stored group order in sync with manual positioning
-            if gid and type(MSWA_SyncGroupMembersFromPositions) == "function" then
-                MSWA_SyncGroupMembersFromPositions(gid)
-            end
-
-            if MSWA.optionsFrame and MSWA.optionsFrame:IsShown() and MSWA.selectedSpellID == key then
-                if MSWA.optionsFrame.detailX then MSWA.optionsFrame.detailX:SetText(("%d"):format(settings.x or 0)) end
-                if MSWA.optionsFrame.detailY then MSWA.optionsFrame.detailY:SetText(("%d"):format(settings.y or 0)) end
-                if MSWA.optionsFrame.detailA then MSWA.optionsFrame.detailA:SetText(settings.anchorFrame or "") end
-            end
+            MSWA_StopIconLiveDrag(self, true)
         else
             MSWA_StopDragging()
         end
@@ -572,6 +681,8 @@ btn.spellID = nil
     MSWA.icons[i] = btn
     return btn
 end
+
+MSWA.IsButtonLiveDragging = MSWA_IsButtonLiveDragging
 
 for i = 1, MSWA.MAX_ICONS do
     MSWA_CreateIcon(i)

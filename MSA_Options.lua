@@ -852,7 +852,49 @@ local function BuildTriggerPage(host)
     end)
     presetDefault:SetPoint("LEFT", presetMSUF, "RIGHT", 6, 0)
 
-    c:SetHeight(900)
+    local attachInfo = W.MutedLabel(c, "", "TOPLEFT", presetCD, "BOTTOMLEFT", 0, -8)
+    local attachBtn = W.Button(c, "Attach to Essential", 170, 22, function()
+        local key = GetSelKey(); if not (key and MSWA_IsTrinketKey and MSWA_IsTrinketKey(key)) then return end
+        local s = EnsureSel(); if not s then return end
+        s.attachToEssential = not s.attachToEssential and true or nil
+        if s.attachToEssential then
+            if not s.attachEssentialSide then s.attachEssentialSide = "END" end
+            if not s.attachEssentialRow then s.attachEssentialRow = "AUTO" end
+            if s.attachEssentialExactSpacing == nil then s.attachEssentialExactSpacing = true end
+            if s.attachEssentialOffsetX == nil then s.attachEssentialOffsetX = 0 end
+            if s.attachEssentialOffsetY == nil then s.attachEssentialOffsetY = 0 end
+        end
+        MSWA_RequestUpdateSpells(); f:Refresh()
+    end)
+    attachBtn:SetPoint("TOPLEFT", attachInfo, "BOTTOMLEFT", 0, -6)
+    local attachHelp = W.MutedLabel(c, "Append this trinket into Blizzard Essential like Ayije CDM. Position > X/Y fine-tunes the injected offset.", "TOPLEFT", attachBtn, "BOTTOMLEFT", 0, -4)
+
+    local ddAttachSide = W.Dropdown(c, "Attach Side", 170,
+        function() return {
+            { text = "Start / Left", value = "START" },
+            { text = "End / Right", value = "END" },
+        } end,
+        function() local s = GetSel(); return (s and s.attachEssentialSide) or "END" end,
+        function(v) local s = EnsureSel(); if s then s.attachEssentialSide = v or "END" end; MSWA_RequestUpdateSpells() end)
+    ddAttachSide:SetPoint("TOPLEFT", attachHelp, "BOTTOMLEFT", 0, -10)
+
+    local ddAttachRow = W.Dropdown(c, "Essential Row", 170,
+        function() return {
+            { text = "Auto", value = "AUTO" },
+            { text = "Row 1 / Top", value = "ROW1" },
+            { text = "Row 2 / Bottom", value = "ROW2" },
+        } end,
+        function() local s = GetSel(); return (s and s.attachEssentialRow) or "AUTO" end,
+        function(v) local s = EnsureSel(); if s then s.attachEssentialRow = v or "AUTO" end; MSWA_RequestUpdateSpells() end)
+    ddAttachRow:SetPoint("TOPLEFT", ddAttachSide, "BOTTOMLEFT", 0, -8)
+
+    local cbAttachExact = W.Checkbox(c, "Match detected Essential spacing", nil, function(v)
+        local s = EnsureSel(); if s then s.attachEssentialExactSpacing = v and true or false end
+        MSWA_RequestUpdateSpells()
+    end)
+    cbAttachExact:SetPoint("TOPLEFT", ddAttachRow, "BOTTOMLEFT", 0, -8)
+
+    c:SetHeight(980)
 
     function f:Refresh()
         local key = GetSelKey(); if not key then return end
@@ -988,6 +1030,24 @@ local function BuildTriggerPage(host)
         if gid2 then local g2 = (db.groups or {})[gid2]; a = (g2 and g2.anchorFrame) or ""
         else a = s.anchorFrame or "" end
         anchorEdit:SetText(a)
+
+        local showAttachOptions = isTrinket and (s.attachToEssential and true or false)
+        attachInfo:SetShown(isTrinket)
+        attachBtn:SetShown(isTrinket)
+        attachHelp:SetShown(isTrinket)
+        ddAttachSide:SetShown(showAttachOptions)
+        ddAttachRow:SetShown(showAttachOptions)
+        cbAttachExact:SetShown(showAttachOptions)
+        if isTrinket then
+            local attached = s.attachToEssential and true or false
+            attachBtn:SetText(attached and "Detach from Essential" or "Attach to Essential")
+            attachInfo:SetText(attached and "Currently attached to Blizzard Essential. Position X/Y fine-tunes the attach offset." or "One-click Ayije-style append for Blizzard Essential style placement.")
+            if attached then
+                ddAttachSide:Refresh()
+                ddAttachRow:Refresh()
+                cbAttachExact:SetChecked(s.attachEssentialExactSpacing ~= false)
+            end
+        end
     end
     return f
 end
@@ -1176,6 +1236,20 @@ local function BuildTextPage(host)
 
     local sizeLabel = W.Label(c, "Size:", "TOPLEFT", ddFont, "BOTTOMLEFT", 0, -8)
     local sizeEdit = W.EditBox(c, 50, 22, true); sizeEdit:SetPoint("LEFT", sizeLabel, "RIGHT", 8, 0)
+    sizeEdit:SetScript("OnEnterPressed", function(self)
+        self:ClearFocus()
+        local v = tonumber(self:GetText())
+        if not v then return end
+        v = math.max(6, math.min(48, v))
+        local s = EnsureSel() or MSWA_GetDB()
+        s.textFontSize = v
+        self:SetText(tostring(v))
+        MSWA_InvalidateIconCache()
+    end)
+    sizeEdit:SetScript("OnEditFocusLost", function(self)
+        local cur = tonumber((GetSel() and GetSel().textFontSize) or MSWA_GetDB().textFontSize or 12) or 12
+        self:SetText(tostring(math.max(6, math.min(48, cur))))
+    end)
     local sizeMinus = W.Button(c, "-", 24, 22, function()
         local s = EnsureSel() or MSWA_GetDB(); local cur = tonumber(s.textFontSize or MSWA_GetDB().textFontSize or 12)
         cur = math.max(6, cur - 1); s.textFontSize = cur; sizeEdit:SetText(tostring(cur)); MSWA_InvalidateIconCache()
@@ -1475,45 +1549,99 @@ local function BuildPositionPage(host)
     W.MutedLabel(c, "Fine-tune aura placement and dimensions.", "TOPLEFT", c, "TOPLEFT", 12, -30)
 
     local h1 = W.SectionHeader(c, "Coordinates", nil, -54)
+    local posHint = W.MutedLabel(c, "", "TOPLEFT", h1, "BOTTOMLEFT", 0, -8)
+
+    local function IsAttachedTrinketSelected()
+        local key = GetSelKey()
+        local s = GetSel()
+        return key and s and MSWA_IsTrinketKey and MSWA_IsTrinketKey(key) and s.attachToEssential and true or false
+    end
+
+    local function ResolvePosField(baseField)
+        if baseField == "x" or baseField == "y" then
+            if IsAttachedTrinketSelected() then
+                return baseField == "x" and "attachEssentialOffsetX" or "attachEssentialOffsetY", 0, true
+            end
+            return baseField, 0, false
+        end
+        return baseField, (baseField == "width" or baseField == "height") and MSWA.ICON_SIZE or 0, false
+    end
 
     local function MakePosRow(lbl, anchor, yOff, field, default)
         local l = W.Label(c, lbl, "TOPLEFT", anchor, "BOTTOMLEFT", 0, yOff or -8)
         local eb = W.EditBox(c, 70, 22); eb:SetPoint("LEFT", l, "RIGHT", 8, 0)
         local minus = W.Button(c, "-", 24, 22, function()
-            local s = EnsureSel(); if s then s[field] = (s[field] or default or 0) - 1 end
+            local s = EnsureSel(); if s then
+                local actualField, actualDefault = ResolvePosField(field)
+                s[actualField] = (s[actualField] or actualDefault or default or 0) - 1
+            end
             MSWA_RequestUpdateSpells(); f:Refresh()
         end); minus:SetPoint("LEFT", eb, "RIGHT", 4, 0)
         local plus = W.Button(c, "+", 24, 22, function()
-            local s = EnsureSel(); if s then s[field] = (s[field] or default or 0) + 1 end
+            local s = EnsureSel(); if s then
+                local actualField, actualDefault = ResolvePosField(field)
+                s[actualField] = (s[actualField] or actualDefault or default or 0) + 1
+            end
             MSWA_RequestUpdateSpells(); f:Refresh()
         end); plus:SetPoint("LEFT", minus, "RIGHT", 2, 0)
         eb:SetScript("OnEnterPressed", function(self) self:ClearFocus()
-            local s = EnsureSel(); if s then local v = tonumber(self:GetText()); if v then s[field] = v end end; MSWA_RequestUpdateSpells()
+            local s = EnsureSel(); if s then
+                local v = tonumber(self:GetText())
+                if v then
+                    local actualField = ResolvePosField(field)
+                    s[actualField] = v
+                end
+            end
+            MSWA_RequestUpdateSpells(); f:Refresh()
         end)
-        return l, eb
+        return l, eb, minus, plus
     end
 
-    local lX, ebX = MakePosRow("X:", h1, -10, "x", 0)
-    local lY, ebY = MakePosRow("Y:", lX, -8, "y", 0)
-    local lW, ebW = MakePosRow("Width:", lY, -8, "width", MSWA.ICON_SIZE)
-    local lH, ebH = MakePosRow("Height:", lW, -8, "height", MSWA.ICON_SIZE)
+    local lX, ebX, minusX, plusX = MakePosRow("X:", posHint, -8, "x", 0)
+    local lY, ebY, minusY, plusY = MakePosRow("Y:", lX, -8, "y", 0)
+    local lW, ebW, minusW, plusW = MakePosRow("Width:", lY, -8, "width", MSWA.ICON_SIZE)
+    local lH, ebH, minusH, plusH = MakePosRow("Height:", lW, -8, "height", MSWA.ICON_SIZE)
 
     local btnReset = W.Button(c, "Reset Position", 120, 24, function()
-        local s = EnsureSel(); if s then s.x = 0; s.y = 0 end; MSWA_RequestUpdateSpells(); f:Refresh()
+        local s = EnsureSel(); if s then
+            if IsAttachedTrinketSelected() then
+                s.attachEssentialOffsetX = 0; s.attachEssentialOffsetY = 0
+            else
+                s.x = 0; s.y = 0
+            end
+        end
+        MSWA_RequestUpdateSpells(); f:Refresh()
     end); btnReset:SetPoint("TOPLEFT", lH, "BOTTOMLEFT", 0, -14)
 
     local btnDefault = W.Button(c, "Default Size", 120, 24, function()
         local s = EnsureSel(); if s then s.width = nil; s.height = nil end; MSWA_RequestUpdateSpells(); f:Refresh()
     end); btnDefault:SetPoint("LEFT", btnReset, "RIGHT", 8, 0)
 
-    c:SetHeight(320)
+    c:SetHeight(340)
 
     function f:Refresh()
         local key = GetSelKey(); if key then pageTitle:SetText(MSWA_GetDisplayNameForKey(key) or "Aura") end
         local s = GetSel() or {}
-        ebX:SetText(("%d"):format(s.x or 0)); ebY:SetText(("%d"):format(s.y or 0))
+        local attached = IsAttachedTrinketSelected()
+        if attached then
+            posHint:SetText("Attached trinket: X/Y are fine offsets relative to the Blizzard Essential row, like Ayije CDM append mode.")
+            btnReset:SetText("Reset Attach Offset")
+        else
+            posHint:SetText("Move the aura freely with X/Y. Width/Height only affects the standalone aura size.")
+            btnReset:SetText("Reset Position")
+        end
+        ebX:SetText(("%d"):format(attached and (s.attachEssentialOffsetX or 0) or (s.x or 0)))
+        ebY:SetText(("%d"):format(attached and (s.attachEssentialOffsetY or 0) or (s.y or 0)))
         ebW:SetText(("%d"):format(s.width or MSWA.ICON_SIZE)); ebH:SetText(("%d"):format(s.height or MSWA.ICON_SIZE))
+        lW:SetShown(not attached); ebW:SetShown(not attached); minusW:SetShown(not attached); plusW:SetShown(not attached)
+        lH:SetShown(not attached); ebH:SetShown(not attached); minusH:SetShown(not attached); plusH:SetShown(not attached)
+        btnDefault:SetShown(not attached)
     end
+
+    MSWA._PositionPageRefresh = function()
+        if f and f.Refresh then f:Refresh() end
+    end
+
     return f
 end
 

@@ -21,6 +21,17 @@ local DEF_W    = 200
 local DEF_H    = 22
 local DEF_TEX  = "Interface\\TargetingFrame\\UI-StatusBar"
 local SPARK_W  = 14
+local BAR_TICK_RATE = 0.05  -- 20 Hz: smooth enough, much lower CPU than per-frame
+
+local floor = math.floor
+
+local function GetTimerTextBucket(seconds, showDecimal)
+    if not seconds or seconds <= 0 then return 0 end
+    if showDecimal and seconds < 10 then
+        return floor((seconds * 10) + 0.0001)
+    end
+    return floor(seconds)
+end
 
 -----------------------------------------------------------
 -- Visible bars + 60fps ticker
@@ -29,9 +40,14 @@ local SPARK_W  = 14
 local visBars  = {}
 local barCount = 0
 local ticker   = CreateFrame("Frame", "MSWA_BarTicker", UIParent)
+local tickAccum = 0
 ticker:Hide()
 
-ticker:SetScript("OnUpdate", function(self)
+ticker:SetScript("OnUpdate", function(self, elapsed)
+    tickAccum = tickAccum + (elapsed or 0)
+    if tickAccum < BAR_TICK_RATE then return end
+    tickAccum = 0
+
     local now = GetTime()
     local any = false
 
@@ -81,7 +97,18 @@ ticker:SetScript("OnUpdate", function(self)
                     bd.spark:Hide()
                 end
                 if bd.timerFS and bd._showTimer then
-                    bd.timerFS:SetText(MSWA_FormatTimer(rem, bd._showDecimal))
+                    local bucket = GetTimerTextBucket(rem, bd._showDecimal)
+                    if bd._lastTimerBucket ~= bucket then
+                        bd._lastTimerBucket = bucket
+                        local nextTimerText = MSWA_FormatTimer(rem, bd._showDecimal)
+                        if nextTimerText ~= bd._lastTimerText then
+                            bd._lastTimerText = nextTimerText
+                            bd.timerFS:SetText(nextTimerText)
+                        end
+                    end
+                elseif bd._lastTimerText ~= nil then
+                    bd._lastTimerText = nil
+                    bd._lastTimerBucket = nil
                 end
 
                 -- Conditional text color (matches icon system tc2)
@@ -92,16 +119,24 @@ ticker:SetScript("OnUpdate", function(self)
                     elseif bd._tc2Cond == "TIMER_ABOVE" then
                         condActive = rem >= bd._tc2Val
                     end
-                    if condActive then
-                        bd.timerFS:SetTextColor(bd._tc2R, bd._tc2G, bd._tc2B, 1)
-                    else
+                    if bd._lastTC2State ~= condActive then
+                        bd._lastTC2State = condActive
+                        if condActive then
+                            bd.timerFS:SetTextColor(bd._tc2R, bd._tc2G, bd._tc2B, 1)
+                        else
+                            bd.timerFS:SetTextColor(bd._baseTextR or 1, bd._baseTextG or 1, bd._baseTextB or 1, 1)
+                        end
+                    end
+                elseif bd._lastTC2State ~= nil then
+                    bd._lastTC2State = nil
+                    if bd.timerFS then
                         bd.timerFS:SetTextColor(bd._baseTextR or 1, bd._baseTextG or 1, bd._baseTextB or 1, 1)
                     end
                 end
             else
                 bd.bar:SetValue(1)
                 if bd.spark then bd.spark:Hide() end
-                if bd.timerFS then bd.timerFS:SetText("") end
+                if bd.timerFS and bd._lastTimerText ~= "" then bd._lastTimerText = ""; bd.timerFS:SetText("") end
             end
         else
             visBars[btn] = nil
@@ -358,8 +393,12 @@ local function ApplyStyle(bd, s, db)
         fs = fs - 2
         if fs < 7 then fs = 7 end
     end
-    bd.nameFS:SetFont(fp, fs, "OUTLINE")
-    bd.timerFS:SetFont(fp, fs, "OUTLINE")
+    local textFontKey = tostring(fp) .. "" .. tostring(fs)
+    if bd._textFontKey ~= textFontKey then
+        bd._textFontKey = textFontKey
+        bd.nameFS:SetFont(fp, fs, "OUTLINE")
+        bd.timerFS:SetFont(fp, fs, "OUTLINE")
+    end
 
     -- Stack font: stackFontKey -> fontKey -> DEFAULT, stackFontSize -> 10
     if bd.stackFS then
@@ -367,10 +406,21 @@ local function ApplyStyle(bd, s, db)
         local sfp = MSWA_GetFontPathFromKey and MSWA_GetFontPathFromKey(sfk) or fp
         local sfs = tonumber(s and s.stackFontSize) or tonumber(db and db.stackFontSize) or 10
         if sfs < 6 then sfs = 6 elseif sfs > 48 then sfs = 48 end
-        bd.stackFS:SetFont(sfp, sfs, "OUTLINE")
+        local stackFontKey = tostring(sfp) .. "" .. tostring(sfs)
+        if bd._stackFontKey ~= stackFontKey then
+            bd._stackFontKey = stackFontKey
+            bd.stackFS:SetFont(sfp, sfs, "OUTLINE")
+        end
         local sc = (s and s.stackColor) or (db and db.stackColor)
+        local scr, scg, scb = 1, 0.82, 0
         if sc then
-            bd.stackFS:SetTextColor(tonumber(sc.r) or 1, tonumber(sc.g) or 0.82, tonumber(sc.b) or 0, 1)
+            scr = tonumber(sc.r) or 1
+            scg = tonumber(sc.g) or 0.82
+            scb = tonumber(sc.b) or 0
+        end
+        if bd._stackColorR ~= scr or bd._stackColorG ~= scg or bd._stackColorB ~= scb then
+            bd._stackColorR, bd._stackColorG, bd._stackColorB = scr, scg, scb
+            bd.stackFS:SetTextColor(scr, scg, scb, 1)
         end
     end
 
@@ -378,8 +428,10 @@ local function ApplyStyle(bd, s, db)
     local tc = (s and s.textColor) or (db and db.textColor)
     local tr, tg, tb = 1, 1, 1
     if tc then tr = tonumber(tc.r) or 1; tg = tonumber(tc.g) or 1; tb = tonumber(tc.b) or 1 end
-    bd.nameFS:SetTextColor(tr, tg, tb, 1)
-    bd.timerFS:SetTextColor(tr, tg, tb, 1)
+    if bd._baseTextR ~= tr or bd._baseTextG ~= tg or bd._baseTextB ~= tb then
+        bd.nameFS:SetTextColor(tr, tg, tb, 1)
+        bd.timerFS:SetTextColor(tr, tg, tb, 1)
+    end
 
     -- Store for conditional coloring updates from ticker
     bd._baseTextR = tr
@@ -443,7 +495,7 @@ function MSWA_HideBar(btn)
     if visBars[btn] then
         visBars[btn] = nil
         barCount = barCount - 1
-        if barCount <= 0 then barCount = 0; ticker:Hide() end
+        if barCount <= 0 then barCount = 0; tickAccum = 0; ticker:Hide() end
     end
 
     btn.icon:SetAlpha(1)
@@ -477,7 +529,13 @@ function MSWA_UpdateBarDisplay(btn, s, db, info)
     local bd = MSWA_EnsureBar(btn)
     ShowBar(btn, bd, s, db)
 
-    if bd.nameFS then bd.nameFS:SetText(info.name or "") end
+    if bd.nameFS then
+        local nextName = info.name or ""
+        if bd._lastNameText ~= nextName then
+            bd._lastNameText = nextName
+            bd.nameFS:SetText(nextName)
+        end
+    end
 
     if info.isActive ~= false then
         bd.frame:SetAlpha(btn:GetAlpha())
@@ -506,13 +564,20 @@ function MSWA_UpdateBarDisplay(btn, s, db, info)
         if bd.spark then bd.spark:Hide() end
         if bd.timerFS then bd.timerFS:SetText("") end
         bd.frame:SetAlpha(tonumber(info.absentAlpha) or 0.45)
+        bd._lastTimerText = ""
     end
 
     if bd.stackFS then
         if info.stacks and info.stacks ~= "" then
-            bd.stackFS:SetText(info.stacks); bd.stackFS:Show()
+            if bd._lastStackText ~= info.stacks then
+                bd._lastStackText = info.stacks
+                bd.stackFS:SetText(info.stacks)
+            end
+            bd.stackFS:Show()
         else
-            bd.stackFS:SetText(""); bd.stackFS:Hide()
+            bd._lastStackText = ""
+            bd.stackFS:SetText("")
+            bd.stackFS:Hide()
         end
     end
 
