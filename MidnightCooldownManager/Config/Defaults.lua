@@ -72,6 +72,8 @@ CDM.defaults = {
     -- Player class resources and auxiliary bars
     resourceClassEnabled = true,
     resourceWidth = 220,
+    resourceWidthMode = "free",
+    resourceWidthSourceIndex = 1,
     resourceHeight = 8,
     resourceGap = 1,
     resourceTickWidth = 1,
@@ -116,6 +118,8 @@ CDM.defaults = {
 
     resourcePowerBarEnabled = true,
     resourcePowerBarWidth = 220,
+    resourcePowerBarWidthMode = "free",
+    resourcePowerBarWidthSourceIndex = 1,
     resourcePowerBarHeight = 8,
     resourcePowerBarAnchorTarget = "resource",
     resourcePowerBarAnchorPoint = "TOP",
@@ -146,6 +150,8 @@ CDM.defaults = {
 
     resourceHPBarEnabled = false,
     resourceHPBarWidth = 220,
+    resourceHPBarWidthMode = "free",
+    resourceHPBarWidthSourceIndex = 1,
     resourceHPBarHeight = 6,
     resourceHPBarAnchorTarget = "resource",
     resourceHPBarAnchorPoint = "TOP",

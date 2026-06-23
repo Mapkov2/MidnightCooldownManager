@@ -889,6 +889,121 @@ local function AnchorTarget(target)
     return _G.UIParent
 end
 
+local WIDTH_MODES = {
+    free = true,
+    class = true,
+    essential = true,
+    utility = true,
+    buffs = true,
+    buffbars = true,
+    cooldownGroup = true,
+    buffGroup = true,
+    barGroup = true,
+}
+
+local function NormalizeWidthMode(mode, allowClass)
+    mode = type(mode) == "string" and mode or "free"
+    if mode == "manual" or mode == "custom" then mode = "free" end
+    if mode == "buff" then mode = "buffs" end
+    if mode == "bars" or mode == "buffBar" then mode = "buffbars" end
+    if not WIDTH_MODES[mode] then mode = "free" end
+    if mode == "class" and not allowClass then mode = "free" end
+    return mode
+end
+
+local function FrameWidthForTarget(frame, target)
+    if not (frame and frame.GetWidth) then return nil end
+    local width = tonumber(frame:GetWidth())
+    if not width or width < 1 then return nil end
+
+    local sourceScale = (frame.GetEffectiveScale and frame:GetEffectiveScale()) or 1
+    local targetScale = (target and target.GetEffectiveScale and target:GetEffectiveScale()) or 1
+    if not sourceScale or sourceScale <= 0 then sourceScale = 1 end
+    if not targetScale or targetScale <= 0 then targetScale = 1 end
+
+    return floor(((width * sourceScale) / targetScale) + 0.5)
+end
+
+local function EstimateIconGroupWidth(groupData)
+    if type(groupData) ~= "table" then return nil end
+    local spells = groupData.spells
+    local count = type(spells) == "table" and #spells or 0
+    if count <= 0 then count = 1 end
+    local iconW = tonumber(groupData.iconWidth or groupData.width) or 30
+    local spacing = tonumber(groupData.spacing) or 1
+    local maxPerRow = tonumber(groupData.maxPerRow) or count
+    if maxPerRow <= 0 or maxPerRow > count then maxPerRow = count end
+    return floor((iconW * maxPerRow) + (max(0, maxPerRow - 1) * spacing) + 0.5)
+end
+
+local function EstimateBarGroupWidth(groupData)
+    if type(groupData) ~= "table" then return nil end
+    local width = tonumber(groupData.barWidth or groupData.width)
+    if not width or width <= 0 then
+        width = CDM.CalculateEssentialRow1Width and CDM.CalculateEssentialRow1Width() or nil
+    end
+    if width and CDM.IsBarCenterGrow and CDM.IsBarCenterGrow(groupData.grow) then
+        local limit = tonumber(groupData.wrapLimit) or 2
+        if limit < 2 then limit = 2 elseif limit > 5 then limit = 5 end
+        local spacing = tonumber(groupData.hSpacing) or 1
+        width = (limit * width) + ((limit - 1) * spacing)
+    end
+    return width
+end
+
+local function GroupSourceForMode(mode)
+    if mode == "cooldownGroup" then
+        return CDM.CooldownGroupSets, CDM.cooldownGroupContainers, EstimateIconGroupWidth
+    elseif mode == "buffGroup" then
+        return CDM.BuffGroupSets, CDM.buffGroupContainers, EstimateIconGroupWidth
+    elseif mode == "barGroup" then
+        return CDM.BarGroupSets, CDM.barGroupContainers, EstimateBarGroupWidth
+    end
+    return nil, nil, nil
+end
+
+local function WidthFromSource(mode, sourceIndex, target)
+    if mode == "free" then return nil end
+    if mode == "class" then
+        return FrameWidthForTarget(state.frame, target)
+    end
+
+    local viewers = CDM.CONST and CDM.CONST.VIEWERS
+    local anchors = CDM.anchorContainers
+    if mode == "essential" then
+        local width = FrameWidthForTarget(anchors and viewers and anchors[viewers.ESSENTIAL], target)
+        return width or (CDM.CalculateEssentialRow1Width and CDM.CalculateEssentialRow1Width())
+    elseif mode == "utility" then
+        return FrameWidthForTarget(anchors and viewers and anchors[viewers.UTILITY], target)
+    elseif mode == "buffs" then
+        return FrameWidthForTarget(anchors and viewers and anchors[viewers.BUFF], target)
+    elseif mode == "buffbars" then
+        return FrameWidthForTarget(anchors and viewers and anchors[viewers.BUFF_BAR], target)
+    end
+
+    local sets, containers, estimate = GroupSourceForMode(mode)
+    if sets then
+        local index = tonumber(sourceIndex) or 1
+        if index < 1 then index = 1 end
+        local frameWidth = FrameWidthForTarget(containers and containers[index], target)
+        if frameWidth then return frameWidth end
+        local groupData = sets.groups and sets.groups[index]
+        return estimate and estimate(groupData) or nil
+    end
+
+    return nil
+end
+
+local function ResolveConfiguredWidth(widthKey, modeKey, indexKey, fallback, target, allowClass)
+    local manualWidth = Clamp(Read(widthKey), fallback, 40, 800)
+    local mode = NormalizeWidthMode(Read(modeKey), allowClass)
+    local sourceWidth = WidthFromSource(mode, Read(indexKey), target)
+    if sourceWidth and sourceWidth >= 40 then
+        return Clamp(sourceWidth, manualWidth, 40, 800)
+    end
+    return manualWidth
+end
+
 local function EnsureStatusBar(parent, name)
     local frame = CreateFrame("StatusBar", name, parent)
     frame:SetStatusBarTexture(WHITE)
@@ -1017,7 +1132,7 @@ local function HideExtraBars(fromIndex)
 end
 
 local function LayoutResourceAnchorFrame()
-    local width = Clamp(Read("resourceWidth"), 220, 40, 800)
+    local width = ResolveConfiguredWidth("resourceWidth", "resourceWidthMode", "resourceWidthSourceIndex", 220, state.frame, false)
     local height = Clamp(Read("resourceHeight"), 8, 2, 80)
     local bgR, bgG, bgB, bgA = ResolveBgColor()
 
@@ -1108,7 +1223,7 @@ end
 local function LayoutAuxBar(bar, kind)
     if not bar then return end
     local prefix = kind == "hp" and "resourceHPBar" or "resourcePowerBar"
-    local width = Clamp(Read(prefix .. "Width"), kind == "hp" and 220 or 220, 40, 800)
+    local width = ResolveConfiguredWidth(prefix .. "Width", prefix .. "WidthMode", prefix .. "WidthSourceIndex", kind == "hp" and 220 or 220, bar, true)
     local height = Clamp(Read(prefix .. "Height"), kind == "hp" and 6 or 8, 2, 80)
     bar:SetSize(width, height)
     bar:ClearAllPoints()

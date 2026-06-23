@@ -28,6 +28,35 @@ local AUX_ANCHOR_TARGETS = {
     { label = "Screen", value = "ui" },
 }
 
+local WIDTH_SOURCE_OPTIONS = {
+    { label = "Free", value = "free" },
+    { label = "Essential Cooldowns", value = "essential" },
+    { label = "Utility Cooldowns", value = "utility" },
+    { label = "Buff Icons", value = "buffs" },
+    { label = "Buff Bars", value = "buffbars" },
+    { label = "Cooldown Group", value = "cooldownGroup" },
+    { label = "Buff Group", value = "buffGroup" },
+    { label = "Custom Bar Group", value = "barGroup" },
+}
+
+local WIDTH_SOURCE_OPTIONS_WITH_CLASS = {
+    { label = "Free", value = "free" },
+    { label = "Class Resource", value = "class" },
+    { label = "Essential Cooldowns", value = "essential" },
+    { label = "Utility Cooldowns", value = "utility" },
+    { label = "Buff Icons", value = "buffs" },
+    { label = "Buff Bars", value = "buffbars" },
+    { label = "Cooldown Group", value = "cooldownGroup" },
+    { label = "Buff Group", value = "buffGroup" },
+    { label = "Custom Bar Group", value = "barGroup" },
+}
+
+local WIDTH_GROUP_SOURCE = {
+    cooldownGroup = true,
+    buffGroup = true,
+    barGroup = true,
+}
+
 local HP_COLOR_MODES = {
     { label = "Class Color", value = "CLASS" },
     { label = "Global Color", value = "GLOBAL" },
@@ -219,6 +248,16 @@ local function ReadBool(key)
     return CDM.defaults and CDM.defaults[key] == true
 end
 
+local function ReadValue(key, fallback)
+    if CDM.db and CDM.db[key] ~= nil then
+        return CDM.db[key]
+    end
+    if CDM.defaults and CDM.defaults[key] ~= nil then
+        return CDM.defaults[key]
+    end
+    return fallback
+end
+
 local function ReadLoadCondition(prefix, suffix, legacyKey)
     local key = prefix .. suffix
     if CDM.db and CDM.db[key] ~= nil then
@@ -257,6 +296,119 @@ local function CreateDropdown(parent, label, width, options, key, scope)
     end)
     dd:SetDefaultText(UI.GetOptionLabel(options, current, tostring(current or "")))
     return text, dd
+end
+
+local function NormalizeWidthSource(mode, allowClass)
+    mode = type(mode) == "string" and mode or "free"
+    if mode == "manual" or mode == "custom" then mode = "free" end
+    if mode == "buff" then mode = "buffs" end
+    if mode == "bars" or mode == "buffBar" then mode = "buffbars" end
+    if mode == "class" and not allowClass then mode = "free" end
+    if mode == "class"
+        or mode == "free"
+        or mode == "essential"
+        or mode == "utility"
+        or mode == "buffs"
+        or mode == "buffbars"
+        or WIDTH_GROUP_SOURCE[mode]
+    then
+        return mode
+    end
+    return "free"
+end
+
+local function WidthGroupSets(mode)
+    if mode == "cooldownGroup" then
+        return CDM.CooldownGroupSets
+    elseif mode == "buffGroup" then
+        return CDM.BuffGroupSets
+    elseif mode == "barGroup" then
+        return CDM.BarGroupSets
+    end
+    return nil
+end
+
+local function WidthGroupLabel(group, index)
+    if type(group) == "table" then
+        local name = group.name or group.label or group.title
+        if name and name ~= "" then return tostring(name) end
+    end
+    return "Group " .. tostring(index or 1)
+end
+
+local function BuildWidthGroupOptions(mode)
+    local sets = WidthGroupSets(mode)
+    local groups = sets and sets.groups
+    local options = {}
+    if type(groups) == "table" then
+        for index, group in ipairs(groups) do
+            options[#options + 1] = { label = WidthGroupLabel(group, index), value = index }
+        end
+    end
+    if #options == 0 then
+        options[1] = { label = "Group 1", value = 1 }
+    end
+    return options
+end
+
+local function RefreshWidthGroupDropdown(label, dropdown, modeKey, indexKey)
+    if not dropdown then return end
+    local mode = NormalizeWidthSource(ReadValue(modeKey, "free"), true)
+    local enabled = WIDTH_GROUP_SOURCE[mode] == true
+    local index = tonumber(ReadValue(indexKey, 1)) or 1
+    local options = BuildWidthGroupOptions(mode)
+
+    dropdown:SetAlpha(enabled and 1 or 0.45)
+    dropdown:EnableMouse(enabled)
+    if label and label.SetAlpha then label:SetAlpha(enabled and 1 or 0.55) end
+    if dropdown.SetDefaultText then
+        dropdown:SetDefaultText(enabled and UI.GetOptionLabel(options, index, "Group " .. tostring(index)) or "Not used")
+    end
+end
+
+local function AddWidthSourceRows(parent, y, modeKey, indexKey, allowClass, onChange)
+    local options = allowClass and WIDTH_SOURCE_OPTIONS_WITH_CLASS or WIDTH_SOURCE_OPTIONS
+
+    local sourceLabel = parent:CreateFontString(nil, "ARTWORK", "MidnightCDM_Font14")
+    sourceLabel:SetText("Width Source")
+    UI.SetTextSubtle(sourceLabel)
+    sourceLabel:SetPoint("TOPLEFT", 0, y)
+
+    local sourceDD = UI.CreateDropdown(parent, 220)
+    sourceDD:SetPoint("LEFT", sourceLabel, "RIGHT", 16, 0)
+
+    local groupLabel = parent:CreateFontString(nil, "ARTWORK", "MidnightCDM_Font14")
+    groupLabel:SetText("Source Group")
+    UI.SetTextSubtle(groupLabel)
+    groupLabel:SetPoint("TOPLEFT", 0, y - 34)
+
+    local groupDD = UI.CreateDropdown(parent, 220)
+    groupDD:SetPoint("LEFT", groupLabel, "RIGHT", 16, 0)
+
+    UI.SetupValueDropdown(sourceDD, options, function()
+        return NormalizeWidthSource(ReadValue(modeKey, "free"), allowClass)
+    end, function(value, labelText)
+        CDM.db[modeKey] = NormalizeWidthSource(value, allowClass)
+        sourceDD:SetDefaultText(labelText or UI.GetOptionLabel(options, CDM.db[modeKey], tostring(CDM.db[modeKey] or "")))
+        RefreshWidthGroupDropdown(groupLabel, groupDD, modeKey, indexKey)
+        SaveAndRefresh()
+        if type(onChange) == "function" then onChange() end
+    end)
+
+    UI.SetupValueDropdown(groupDD, function()
+        return BuildWidthGroupOptions(NormalizeWidthSource(ReadValue(modeKey, "free"), true))
+    end, function()
+        return tonumber(ReadValue(indexKey, 1)) or 1
+    end, function(value, labelText)
+        CDM.db[indexKey] = tonumber(value) or 1
+        groupDD:SetDefaultText(labelText or ("Group " .. tostring(CDM.db[indexKey])))
+        SaveAndRefresh()
+        if type(onChange) == "function" then onChange() end
+    end)
+
+    sourceDD:SetDefaultText(UI.GetOptionLabel(options, NormalizeWidthSource(ReadValue(modeKey, "free"), allowClass), "Free"))
+    RefreshWidthGroupDropdown(groupLabel, groupDD, modeKey, indexKey)
+    return y - 76
 end
 
 local function CreatePreview(parent)
@@ -1023,6 +1175,91 @@ local function CreatePreview(parent)
         return max(0, min(spec.segments or 1, floor((spec.segments or 1) * wave + 0.5)))
     end
 
+    local function PreviewClampWidth(width, fallback)
+        width = tonumber(width) or tonumber(fallback) or 220
+        if width < 90 then return 90 end
+        if width > 560 then return 560 end
+        return width
+    end
+
+    local function PreviewFrameWidth(sourceFrame)
+        if not (sourceFrame and sourceFrame.GetWidth) then return nil end
+        local width = tonumber(sourceFrame:GetWidth())
+        return width and width > 1 and width or nil
+    end
+
+    local function PreviewIconGroupWidth(group)
+        if type(group) ~= "table" then return nil end
+        local spells = group.spells
+        local count = type(spells) == "table" and #spells or 0
+        if count <= 0 then count = 1 end
+        local iconW = tonumber(group.iconWidth or group.width) or 30
+        local spacing = tonumber(group.spacing) or 1
+        local maxPerRow = tonumber(group.maxPerRow) or count
+        if maxPerRow <= 0 or maxPerRow > count then maxPerRow = count end
+        return (iconW * maxPerRow) + (max(0, maxPerRow - 1) * spacing)
+    end
+
+    local function PreviewBarGroupWidth(group)
+        if type(group) ~= "table" then return nil end
+        local width = tonumber(group.barWidth or group.width)
+        if not width or width <= 0 then
+            width = CDM.CalculateEssentialRow1Width and CDM.CalculateEssentialRow1Width() or nil
+        end
+        if width and CDM.IsBarCenterGrow and CDM.IsBarCenterGrow(group.grow) then
+            local limit = tonumber(group.wrapLimit) or 2
+            if limit < 2 then limit = 2 elseif limit > 5 then limit = 5 end
+            local spacing = tonumber(group.hSpacing) or 1
+            width = (limit * width) + ((limit - 1) * spacing)
+        end
+        return width
+    end
+
+    local function PreviewGroupWidth(mode, sourceIndex)
+        local index = tonumber(sourceIndex) or 1
+        if index < 1 then index = 1 end
+        local sets = WidthGroupSets(mode)
+        local containers = mode == "cooldownGroup" and CDM.cooldownGroupContainers
+            or mode == "buffGroup" and CDM.buffGroupContainers
+            or mode == "barGroup" and CDM.barGroupContainers
+            or nil
+        local frameWidth = PreviewFrameWidth(containers and containers[index])
+        if frameWidth then return frameWidth end
+        local group = sets and sets.groups and sets.groups[index]
+        return mode == "barGroup" and PreviewBarGroupWidth(group) or PreviewIconGroupWidth(group)
+    end
+
+    local function PreviewAnchorWidth(mode)
+        local viewers = CDM.CONST and CDM.CONST.VIEWERS
+        local anchors = CDM.anchorContainers
+        if mode == "essential" then
+            return PreviewFrameWidth(anchors and viewers and anchors[viewers.ESSENTIAL])
+                or (CDM.CalculateEssentialRow1Width and CDM.CalculateEssentialRow1Width())
+                or PreviewFrameWidth(ref)
+        elseif mode == "utility" then
+            return PreviewFrameWidth(anchors and viewers and anchors[viewers.UTILITY])
+        elseif mode == "buffs" then
+            return PreviewFrameWidth(anchors and viewers and anchors[viewers.BUFF])
+        elseif mode == "buffbars" then
+            return PreviewFrameWidth(anchors and viewers and anchors[viewers.BUFF_BAR])
+        end
+        return nil
+    end
+
+    local function PreviewWidth(widthKey, modeKey, indexKey, fallback, classWidth)
+        local manual = PreviewClampWidth(ReadValue(widthKey, fallback), fallback)
+        local mode = NormalizeWidthSource(ReadValue(modeKey, "free"), classWidth ~= nil)
+        local sourceWidth
+        if mode == "class" then
+            sourceWidth = classWidth
+        elseif WIDTH_GROUP_SOURCE[mode] then
+            sourceWidth = PreviewGroupWidth(mode, ReadValue(indexKey, 1))
+        else
+            sourceWidth = PreviewAnchorWidth(mode)
+        end
+        return sourceWidth and PreviewClampWidth(sourceWidth, manual) or manual
+    end
+
     local function RenderResource(spec)
         local classEnabled = ReadBool("resourceClassEnabled")
         local hasResource = classEnabled and spec and not spec.noResource and spec.mode ~= "none"
@@ -1041,7 +1278,7 @@ local function CreatePreview(parent)
         local count = max(1, min(10, tonumber(spec.segments) or 1))
         local mode = spec.mode or "segmented"
         local continuous = mode == "continuous" or mode == "timer" or mode == "single"
-        local width = min(560, max(90, tonumber(CDM.db.resourceWidth) or 220))
+        local width = PreviewWidth("resourceWidth", "resourceWidthMode", "resourceWidthSourceIndex", 220)
         local height = max(2, tonumber(CDM.db.resourceHeight) or 8)
         local gap = max(0, tonumber(CDM.db.resourceGap) or 1)
         local value = CurrentAnimatedValue(spec)
@@ -1121,7 +1358,7 @@ local function CreatePreview(parent)
             PlacePreviewHandle("power", power, false)
             return false
         end
-        local width = min(560, max(90, tonumber(CDM.db.resourcePowerBarWidth) or 220))
+        local width = PreviewWidth("resourcePowerBarWidth", "resourcePowerBarWidthMode", "resourcePowerBarWidthSourceIndex", 220, resourceShown and PreviewFrameWidth(resource) or nil)
         local height = max(2, tonumber(CDM.db.resourcePowerBarHeight) or 8)
         local value = frame.animating and (0.22 + ((math.sin((frame.animationElapsed or 0) * 1.25) + 1) * 0.35)) or 0.66
         local pType = UnitPowerType and UnitPowerType("player") or 0
@@ -1164,7 +1401,7 @@ local function CreatePreview(parent)
             PlacePreviewHandle("hp", hp, false)
             return false
         end
-        local width = min(560, max(90, tonumber(CDM.db.resourceHPBarWidth) or 220))
+        local width = PreviewWidth("resourceHPBarWidth", "resourceHPBarWidthMode", "resourceHPBarWidthSourceIndex", 220, resourceShown and PreviewFrameWidth(resource) or nil)
         local height = max(2, tonumber(CDM.db.resourceHPBarHeight) or 6)
         local value = frame.animating and (0.36 + ((math.sin((frame.animationElapsed or 0) * 0.85) + 1) * 0.28)) or 0.82
         local r, g, b = PreviewHPColor(value)
@@ -1444,7 +1681,11 @@ local function CreateResourcesTab(page)
     y = AddStatusbarTextureRow(classBody, "Background Texture", "resourceBgTexture", y, "Inherit Foreground")
     y = y - 6
 
-    local width = UI.CreateModernSlider(classBody, "Width", 40, 800, CDM.db.resourceWidth or 220, function(v)
+    y = AddWidthSourceRows(classBody, y, "resourceWidthMode", "resourceWidthSourceIndex", false, function()
+        preview:RefreshPreview()
+    end)
+
+    local width = UI.CreateModernSlider(classBody, "Free Width", 40, 800, CDM.db.resourceWidth or 220, function(v)
         CDM.db.resourceWidth = UI.RoundToInt(v)
         SaveAndRefresh()
         preview:RefreshPreview()
@@ -1590,7 +1831,11 @@ local function CreateResourcesTab(page)
     y = AddStatusbarTextureRow(powerBody, "Texture", "resourcePowerBarTexture", y)
     y = AddStatusbarTextureRow(powerBody, "Background Texture", "resourcePowerBarBgTexture", y, "Inherit Foreground")
     y = y - 6
-    local pw = UI.CreateModernSlider(powerBody, "Width", 40, 800, CDM.db.resourcePowerBarWidth or 220, function(v)
+    y = AddWidthSourceRows(powerBody, y, "resourcePowerBarWidthMode", "resourcePowerBarWidthSourceIndex", true, function()
+        preview:RefreshPreview()
+    end)
+
+    local pw = UI.CreateModernSlider(powerBody, "Free Width", 40, 800, CDM.db.resourcePowerBarWidth or 220, function(v)
         CDM.db.resourcePowerBarWidth = UI.RoundToInt(v)
         SaveAndRefresh()
         preview:RefreshPreview()
@@ -1632,7 +1877,11 @@ local function CreateResourcesTab(page)
     y = AddStatusbarTextureRow(hpBody, "Texture", "resourceHPBarTexture", y)
     y = AddStatusbarTextureRow(hpBody, "Background Texture", "resourceHPBarBgTexture", y, "Inherit Foreground")
     y = y - 6
-    local hw = UI.CreateModernSlider(hpBody, "Width", 40, 800, CDM.db.resourceHPBarWidth or 220, function(v)
+    y = AddWidthSourceRows(hpBody, y, "resourceHPBarWidthMode", "resourceHPBarWidthSourceIndex", true, function()
+        preview:RefreshPreview()
+    end)
+
+    local hw = UI.CreateModernSlider(hpBody, "Free Width", 40, 800, CDM.db.resourceHPBarWidth or 220, function(v)
         CDM.db.resourceHPBarWidth = UI.RoundToInt(v)
         SaveAndRefresh()
         preview:RefreshPreview()
