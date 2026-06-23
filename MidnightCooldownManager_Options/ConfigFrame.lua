@@ -16,6 +16,7 @@ local ADDON_NAME = "MidnightCooldownManager"
 local versionText = nil
 local statusText = nil
 local editModeBtn = nil
+local moveModeBtn = nil
 local discordText = nil
 local twitchText = nil
 local footerRefreshRegistered = false
@@ -822,6 +823,16 @@ local function RefreshHeaderStatus()
             editModeBtn:SetActive(CDM.isEditModeActive)
         end
     end
+    if moveModeBtn then
+        local moveActive = CDM.IsMoveModeActive and CDM:IsMoveModeActive()
+        moveModeBtn:SetText("Move Mode: " .. (moveActive and "On" or "Off"))
+        if moveModeBtn.SetActive then
+            moveModeBtn:SetActive(moveActive and true or false)
+        end
+        if moveModeBtn.SetEnabled then
+            moveModeBtn:SetEnabled(not combatLocked)
+        end
+    end
     if versionText then
         versionText:SetText(GetAddonVersionText() or "")
     end
@@ -855,6 +866,17 @@ local function OpenEditModeSettingsOverlay()
         ns._DashboardEditModeOverlay = overlay
     end
     overlay:Show()
+end
+
+local function ToggleMoveModeFromHeader()
+    if CDM.ToggleMoveMode then
+        CDM:ToggleMoveMode()
+    end
+    RefreshHeaderStatus()
+end
+
+function API:NotifyMoveModeChanged()
+    RefreshHeaderStatus()
 end
 
 local function SetHeaderButtonTooltip(btn, title, text)
@@ -1363,9 +1385,15 @@ local function CreateConfigFrame()
 
     statusText = statusBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     statusText:SetPoint("LEFT", statusBar, "LEFT", 10, 0)
-    statusText:SetPoint("RIGHT", statusBar, "RIGHT", -92, 0)
+    statusText:SetPoint("RIGHT", statusBar, "RIGHT", -232, 0)
     statusText:SetJustifyH("LEFT")
     UI.SetTextColor(statusText, COLORS.muted)
+
+    moveModeBtn = UI.CreateModernButton(statusBar, "Move Mode: Off", 126, 18, "primary")
+    moveModeBtn:SetPoint("RIGHT", statusBar, "RIGHT", -94, 0)
+    moveModeBtn:SetScript("OnClick", ToggleMoveModeFromHeader)
+    SetHeaderButtonTooltip(moveModeBtn, "Move Mode", "Move active MCDM groups, trackers, bars, and resource frames.")
+    ConfigFrame.moveModeButton = moveModeBtn
 
     versionText = statusBar:CreateFontString(nil, "OVERLAY")
     versionText:SetPoint("RIGHT", statusBar, "RIGHT", -10, 0)
@@ -1453,6 +1481,7 @@ local function ClearPartialConfigFrame()
     versionText = nil
     statusText = nil
     editModeBtn = nil
+    moveModeBtn = nil
     navRows = {}
     navGroups = {}
     navSearchBox = nil
@@ -1512,6 +1541,7 @@ function API:RebuildConfigFrame(targetTab)
         versionText = nil
         statusText = nil
         editModeBtn = nil
+        moveModeBtn = nil
         discordText = nil
         twitchText = nil
         navRows = {}
