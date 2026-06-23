@@ -1,0 +1,35 @@
+## Interface: 120000
+## Title: |cff38c7f0Midnight|r |cffd7e4ffSimple Cooldown|r Options
+## Notes: Load-on-demand superellipse options UI for Midnight Simple Cooldown.
+## Author: Mapko
+## Version: 1.0 Beta
+## DefaultState: enabled
+## LoadOnDemand: 1
+## Dependencies: MidnightCooldownManager
+## IconTexture: Interface\AddOns\MidnightCooldownManager\Media\MCDM_MinimapIcon.tga
+
+Init.lua
+UIHelpers.lua
+ConfigKeys.lua
+ConfigFrame.lua
+Dashboard.lua
+Sizes.lua
+Layout.lua
+Positions.lua
+Border.lua
+Text.lua
+Glow.lua
+Fading.lua
+Assist.lua
+GroupEditorShared.lua
+BuffGroups.lua
+CooldownGroups.lua
+ImportExport.lua
+Profiles.lua
+Racials.lua
+Defensives.lua
+EditModeOverlay.lua
+Trinkets.lua
+Bars.lua
+Externals.lua
+Resources.lua

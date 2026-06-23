@@ -1,0 +1,76 @@
+## Interface: 120000
+## Title: |cff38c7f0Midnight|r |cffd7e4ffSimple Cooldown|r
+## Notes: Cooldown, buff icon, buff bar, and class resource manager with a Midnight superellipse frontend.
+## Author: Mapko
+## Version: 1.0 Beta
+## DefaultState: enabled
+## SavedVariables: MidnightCooldownManagerDB
+## IconTexture: Interface\AddOns\MidnightCooldownManager\Media\MCDM_MinimapIcon.tga
+## AddonCompartmentFunc: MCDM_AddonCompartment_OnClick
+## AddonCompartmentFuncOnEnter: MCDM_AddonCompartment_OnEnter
+## AddonCompartmentFuncOnLeave: MCDM_AddonCompartment_OnLeave
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
+Libs\LibCustomGlow-1.0\LibCustomGlow-1.0.lua
+
+Init.lua
+Core\AddonCompartment.lua
+Locales\enUS.lua
+Locales\zhCN.lua
+Locales\ptBR.lua
+Locales\deDE.lua
+Locales\frFR.lua
+Locales\ruRU.lua
+
+State\Changelog.lua
+
+Core\Constants.lua
+Core\Pixel.lua
+Core\Border.lua
+Core\CooldownViewerCompat.lua
+Core\CooldownRecord.lua
+Core\CooldownIndex.lua
+Core\GroupMatcher.lua
+Core\SpellUtils.lua
+Core\CooldownFormatter.lua
+Core\Style.lua
+Core\EditMode.lua
+Core\Layout\Layout.lua
+Core\Layout\Reanchor.lua
+Core\GroupContainerUtils.lua
+Core\TrackerUtils.lua
+Core\TrackerCooldownWatcher.lua
+Core\TrackerSpellCooldownWatcher.lua
+Core\TrackerBase.lua
+Core\Glow.lua
+Core\GlowDirector.lua
+Core\InternalCallbacks.lua
+Core\SpecChange.lua
+Core\Keybinds.lua
+Core\Fading.lua
+Core\Resources\ResourceRuntime.lua
+Core\CooldownDiagnostics.lua
+
+Config\Defaults.lua
+Config\Core.lua
+Config\SpecSpellCache.lua
+Config\ProfileIO.lua
+Config\WagoUI.lua
+
+Modules\Racials.lua
+Modules\Defensives.lua
+Modules\Trinkets.lua
+Modules\CustomBuffs.lua
+Modules\BuffGroupPlaceholders.lua
+Modules\BuffGroups.lua
+Modules\BuffGroupSelectionPreview.lua
+Modules\BarGroups.lua
+Modules\BuffGroupOverlays.lua
+Modules\CooldownGroups.lua
+Modules\RotationAssist.lua
+Modules\PressOverlay.lua
+Modules\Externals.lua
+
+Core\Main.lua

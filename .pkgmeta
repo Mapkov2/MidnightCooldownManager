@@ -1,0 +1,16 @@
+# The authoritative package is created by tools/package-release.ps1 because this
+# addon ships two folders at the ZIP root.
+package-as: MidnightCooldownManager
+enable-nolib-creation: no
+ignore:
+  - .git
+  - .github
+  - _backups
+  - _release-stage
+  - dist
+  - tools
+  - README.md
+  - CHANGELOG.md
+  - VERSION
+  - .pkgmeta
+

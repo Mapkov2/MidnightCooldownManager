@@ -1,0 +1,28 @@
+name: MCDM CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1
+
+      - name: Validate addon tree
+        shell: pwsh
+        run: ./tools/validate.ps1
+
+      - name: Build release package
+        shell: pwsh
+        run: ./tools/package-release.ps1
+

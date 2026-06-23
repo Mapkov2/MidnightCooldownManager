@@ -1,0 +1,149 @@
+name: MCDM Release
+run-name: Publish ${{ inputs.version || github.ref_name }}
+
+on:
+  push:
+    tags:
+      - "[0-9]*"
+      - "v[0-9]*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example 1.0 Beta
+        required: true
+        default: "1.0 Beta"
+        type: string
+      prerelease:
+        description: Publish as beta/alpha when version indicates it
+        required: true
+        default: true
+        type: boolean
+      release_name:
+        description: Optional display name
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      RAW_RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+      RAW_RELEASE_NAME: ${{ inputs.release_name }}
+      RAW_IS_PRERELEASE: ${{ inputs.prerelease }}
+      WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
+      WAGO_PROJECT_ID: ${{ vars.WAGO_PROJECT_ID || secrets.WAGO_PROJECT_ID }}
+      CF_API_KEY: ${{ secrets.CF_API_KEY || secrets.CURSEFORGE }}
+      CF_PROJECT_ID: ${{ vars.CF_PROJECT_ID || secrets.CF_PROJECT_ID }}
+      CF_GAME_VERSION_IDS: ${{ vars.CF_GAME_VERSION_IDS || secrets.CF_GAME_VERSION_IDS }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1
+
+      - name: Resolve release metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $version = $env:RAW_RELEASE_VERSION
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = Get-Content -LiteralPath "VERSION" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+          }
+          $version = ($version -replace '^refs/tags/', '') -replace '^v(?=\d)', ''
+          $version = $version -replace '(?i)[._-]*(alpha|beta|rc|pre)[._-]*', ' $1 '
+          $version = ($version -replace '\s+', ' ').Trim()
+          $version = [regex]::Replace($version, '(?i)\b(alpha|beta|pre)\b', { param($m) (Get-Culture).TextInfo.ToTitleCase($m.Value.ToLowerInvariant()) })
+          $version = [regex]::Replace($version, '(?i)\brc\b', 'RC')
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Release version cannot be empty."
+          }
+
+          $fileVersion = ($version -replace '[\\/:*?"<>|]', '-')
+          $fileVersion = ($fileVersion -replace '[^A-Za-z0-9._-]+', '-').Trim('-')
+          $tagName = "v$fileVersion"
+          $releaseName = $env:RAW_RELEASE_NAME
+          if ([string]::IsNullOrWhiteSpace($releaseName)) {
+            $releaseName = "Midnight Simple Cooldown $version"
+          }
+          $isPrerelease = ($env:RAW_IS_PRERELEASE -eq "true") -or ($version -match '(?i)(alpha|beta|rc|pre)')
+          if ($version -match '(?i)alpha') {
+            $wagoStability = "alpha"
+            $cfType = "alpha"
+          } elseif ($isPrerelease) {
+            $wagoStability = "beta"
+            $cfType = "beta"
+          } else {
+            $wagoStability = "stable"
+            $cfType = "release"
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "file_version=$fileVersion" >> $env:GITHUB_OUTPUT
+          "tag=$tagName" >> $env:GITHUB_OUTPUT
+          "release_name=$releaseName" >> $env:GITHUB_OUTPUT
+          "is_prerelease=$($isPrerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "make_latest=$(if ($isPrerelease) { 'false' } else { 'true' })" >> $env:GITHUB_OUTPUT
+          "wago_stability=$wagoStability" >> $env:GITHUB_OUTPUT
+          "cf_release_type=$cfType" >> $env:GITHUB_OUTPUT
+          Write-Host "Release '$releaseName' uses version '$version', tag '$tagName', Wago '$wagoStability', CurseForge '$cfType'."
+
+      - name: Validate addon tree
+        shell: pwsh
+        run: ./tools/validate.ps1
+
+      - name: Build release package
+        id: package
+        shell: pwsh
+        run: |
+          $zipPath = ./tools/package-release.ps1 -Version '${{ steps.meta.outputs.version }}'
+          "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MidnightCooldownManager-${{ steps.meta.outputs.file_version }}
+          path: ${{ steps.package.outputs.zip_path }}
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.release_name }}
+          body_path: CHANGELOG.md
+          prerelease: ${{ steps.meta.outputs.is_prerelease }}
+          make_latest: ${{ steps.meta.outputs.make_latest }}
+          files: ${{ steps.package.outputs.zip_path }}
+
+      - name: Publish to Wago
+        if: env.WAGO_API_TOKEN != ''
+        shell: pwsh
+        env:
+          WAGO_STABILITY: ${{ steps.meta.outputs.wago_stability }}
+        run: |
+          $pre = [bool]::Parse('${{ steps.meta.outputs.is_prerelease }}')
+          ./tools/publish-wago.ps1 `
+            -ZipPath '${{ steps.package.outputs.zip_path }}' `
+            -Version '${{ steps.meta.outputs.version }}' `
+            -ReleaseName '${{ steps.meta.outputs.release_name }}' `
+            -Prerelease:$pre
+
+      - name: Publish to CurseForge
+        if: env.CF_API_KEY != ''
+        shell: pwsh
+        env:
+          CF_RELEASE_TYPE: ${{ steps.meta.outputs.cf_release_type }}
+        run: |
+          $pre = [bool]::Parse('${{ steps.meta.outputs.is_prerelease }}')
+          ./tools/publish-curseforge.ps1 `
+            -ZipPath '${{ steps.package.outputs.zip_path }}' `
+            -Version '${{ steps.meta.outputs.version }}' `
+            -ReleaseName '${{ steps.meta.outputs.release_name }}' `
+            -Prerelease:$pre
+
