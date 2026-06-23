@@ -70,6 +70,39 @@ StaticPopupDialogs["MidnightCooldownManager_CONFIRM_RESET_PROFILE"] = {
     preferredIndex = 3,
 }
 
+StaticPopupDialogs["MidnightCooldownManager_CONFIRM_FACTORY_RESET"] = {
+    text = "Factory reset all Midnight Simple Cooldown settings? This clears profiles, global options, cached data, and reloads the UI.",
+    button1 = "Factory Reset",
+    button2 = L["Cancel"],
+    OnAccept = function()
+        if InCombatLockdown and InCombatLockdown() then
+            CDM.PrintError(L["Cannot open config while in combat"])
+            return
+        end
+        if CDM.StopMoveMode then
+            CDM:StopMoveMode()
+        end
+        MidnightCooldownManagerDB = nil
+        CDM.db = nil
+        CDM.activeProfileName = nil
+        if ReloadUI then
+            ReloadUI()
+        end
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+}
+
+function API:FactoryResetAll()
+    if StaticPopup_Show then
+        StaticPopup_Show("MidnightCooldownManager_CONFIRM_FACTORY_RESET")
+        return true
+    end
+    return false
+end
+
 StaticPopupDialogs["MidnightCooldownManager_CONFIRM_COPY_PROFILE"] = {
     text = L["Copy all settings from \"%s\" into the current profile?"],
     button1 = L["Copy"],

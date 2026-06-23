@@ -37,6 +37,7 @@ local NAV_W = 174
 local SNAP_EDGE_PX = 24
 local SNAP_FRAME_EDGE_PX = 4
 local SNAP_SCREEN_MARGIN = 14
+local MENU_SCALE_MIN, MENU_SCALE_MAX = 0.50, 1.50
 local MINIMIZED_WINDOW_W, MINIMIZED_WINDOW_H = 300, 32
 local SCROLL_FRAME_NAMES = {
     racials = "MidnightCDM_RacialsScrollFrame",
@@ -181,6 +182,60 @@ local function ApplyWindowLayout(frame, layout, skipSave)
     return true
 end
 
+local function ClampMenuScale(scale)
+    scale = tonumber(scale) or 1
+    if scale < MENU_SCALE_MIN then
+        return MENU_SCALE_MIN
+    end
+    if scale > MENU_SCALE_MAX then
+        return MENU_SCALE_MAX
+    end
+    return scale
+end
+
+local function ReadConfigMenuScale()
+    local state = EnsureGlobalOptionsState()
+    if type(state) ~= "table" then return 1 end
+    return ClampMenuScale(state.menuScale or 1)
+end
+
+local function SaveConfigMenuScale(scale)
+    local state = EnsureGlobalOptionsState()
+    if type(state) ~= "table" then return end
+    state.menuScale = ClampMenuScale(scale)
+end
+
+local function ApplyConfigMenuScale(frame, scale, skipSave)
+    scale = ClampMenuScale(scale)
+    frame = frame or ConfigFrame or ns.ConfigFrame
+    if frame and frame.SetScale then
+        frame:SetScale(scale)
+    end
+    if minimizedBar and minimizedBar.SetScale then
+        minimizedBar:SetScale(scale)
+    end
+    if not skipSave then
+        SaveConfigMenuScale(scale)
+    end
+    return scale
+end
+
+function ns.GetConfigMenuScale()
+    return ReadConfigMenuScale()
+end
+
+function ns.SetConfigMenuScale(scale)
+    return ApplyConfigMenuScale(ConfigFrame or ns.ConfigFrame, scale, false)
+end
+
+function API:GetConfigMenuScale()
+    return ReadConfigMenuScale()
+end
+
+function API:SetConfigMenuScale(scale)
+    return ApplyConfigMenuScale(ConfigFrame or ns.ConfigFrame, scale, false)
+end
+
 local function IsConfigSnapEnabled()
     local state = EnsureGlobalOptionsState()
     if type(state) ~= "table" then return true end
@@ -233,6 +288,7 @@ local function HideConfigPopups()
     end
 
     StaticPopup_Hide("MidnightCooldownManager_COPY_URL")
+    StaticPopup_Hide("MidnightCooldownManager_CONFIRM_FACTORY_RESET")
     StaticPopup_Hide("MidnightCooldownManager_CONFIRM_RESET_PROFILE")
     StaticPopup_Hide("MidnightCooldownManager_CONFIRM_COPY_PROFILE")
     StaticPopup_Hide("MidnightCooldownManager_CONFIRM_DELETE_PROFILE")
@@ -1078,6 +1134,7 @@ local function CreateConfigFrame()
     else
         UI.ApplyBackdrop(ConfigFrame, COLORS.shell, COLORS.border)
     end
+    ApplyConfigMenuScale(ConfigFrame, ReadConfigMenuScale(), true)
     ApplyWindowLayout(ConfigFrame, savedLayout, true)
     ConfigFrame:Hide()
     AddSpecialFrameOnce("MidnightCooldownManagerConfigFrame")

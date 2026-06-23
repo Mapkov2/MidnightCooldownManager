@@ -112,6 +112,55 @@ local function ToggleMoveMode()
     RefreshDashboard()
 end
 
+local function GetMenuScale()
+    if API.GetConfigMenuScale then
+        return API:GetConfigMenuScale()
+    end
+    return 1
+end
+
+local function SetMenuScale(scale)
+    scale = tonumber(scale) or 1
+    if scale < 0.50 then
+        scale = 0.50
+    elseif scale > 1.50 then
+        scale = 1.50
+    end
+    if API.SetConfigMenuScale then
+        API:SetConfigMenuScale(scale)
+    end
+    return scale
+end
+
+local function SetMenuScalePercent(percent)
+    percent = tonumber(percent) or 100
+    if percent < 50 then
+        percent = 50
+    elseif percent > 150 then
+        percent = 150
+    end
+    local applied = SetMenuScale(percent / 100)
+    if dashboardWidgets and dashboardWidgets.menuScaleValue then
+        SetText(dashboardWidgets.menuScaleValue, string.format("Menu %d%%", math.floor((applied * 100) + 0.5)))
+    end
+end
+
+local function ShowFactoryReset()
+    if API.FactoryResetAll then
+        API:FactoryResetAll()
+    elseif StaticPopup_Show then
+        StaticPopup_Show("MidnightCooldownManager_CONFIRM_FACTORY_RESET")
+    end
+end
+
+local function CopySupportLink(title, url)
+    if StaticPopup_Show then
+        StaticPopup_Show("MidnightCooldownManager_COPY_URL", nil, nil, { title = title, url = url })
+    elseif CDM.Print then
+        CDM.Print((title or "Link") .. ": " .. tostring(url or ""))
+    end
+end
+
 local function RunSmokeDiagnostic()
     if CDM.RunCooldownSmokeDiagnostic then
         CDM:RunCooldownSmokeDiagnostic()
@@ -361,6 +410,25 @@ local function CreateQuickAction(parent, text, tabId, x, y, role, onClick)
     return button
 end
 
+local function CreateSupportButton(parent, text, url, x, y, width)
+    local button = UI.CreateModernButton(parent, text, width or 88, 24)
+    button:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    button:SetScript("OnClick", function()
+        CopySupportLink(text, url)
+    end)
+    button:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(text, 1, 1, 1)
+        GameTooltip:AddLine("Click to copy the link.", 0.65, 0.72, 0.86)
+        GameTooltip:Show()
+    end)
+    button:SetScript("OnLeave", function()
+        if GameTooltip then GameTooltip:Hide() end
+    end)
+    return button
+end
+
 local function GetDiagnostics()
     if type(CDM.GetCooldownDiagnostics) ~= "function" then return nil end
     local ok, diag = pcall(CDM.GetCooldownDiagnostics, CDM)
@@ -450,6 +518,13 @@ function RefreshDashboard()
             widgets.moveButton:SetEnabled(not inCombat)
         end
     end
+    local menuScalePct = math.floor((GetMenuScale() * 100) + 0.5)
+    if widgets.menuScaleValue then
+        SetText(widgets.menuScaleValue, string.format("Menu %d%%", menuScalePct))
+    end
+    if widgets.menuScaleSlider and widgets.menuScaleSlider.UpdateUIValue then
+        widgets.menuScaleSlider:UpdateUIValue(menuScalePct)
+    end
 
     SetChecklistState(widgets.checkProfile, profile ~= nil and profile ~= "", "done", "open")
     SetChecklistState(widgets.checkData, dataReady and apiOk, "done", "check")
@@ -470,7 +545,7 @@ local function CreateDashboardTab(page)
     dashboardPage = page
     dashboardWidgets = {}
 
-    local content = UI.CreateScrollableTab(page, "MidnightCDM_DashboardScrollFrame", 760, 820)
+    local content = UI.CreateScrollableTab(page, "MidnightCDM_DashboardScrollFrame", 1040, 820)
     local widgets = dashboardWidgets
 
     local hero = CreatePanel(content, 808, 88)
@@ -547,21 +622,80 @@ local function CreateDashboardTab(page)
 
     local recoveryTitle = recovery:CreateFontString(nil, "OVERLAY", "MidnightCDM_Font14")
     recoveryTitle:SetPoint("TOPLEFT", recovery, "TOPLEFT", 16, -12)
-    recoveryTitle:SetText("Maintenance")
+    recoveryTitle:SetText("Display & Recovery")
     UI.SetTextWhite(recoveryTitle)
 
     local recoveryText = recovery:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     recoveryText:SetPoint("TOPLEFT", recoveryTitle, "BOTTOMLEFT", 0, -8)
     recoveryText:SetPoint("RIGHT", recovery, "RIGHT", -16, 0)
     recoveryText:SetJustifyH("LEFT")
-    recoveryText:SetText("Open profile tools, run the smoke diagnostic, or jump to Blizzard's native CDM page.")
+    recoveryText:SetText("Recovery shortcuts for profile state, diagnostics, and a guarded full reset.")
     UI.SetTextSubtle(recoveryText)
 
     CreateQuickAction(recovery, "Profiles", "profiles", 16, -82)
     CreateQuickAction(recovery, "Smoke", nil, 184, -82, nil, RunSmokeDiagnostic):SetWidth(74)
+    local factoryButton = UI.CreateModernButton(recovery, "Factory Reset", 118, 24, "danger")
+    factoryButton:SetPoint("TOPLEFT", recovery, "TOPLEFT", 16, -108)
+    factoryButton:SetScript("OnClick", ShowFactoryReset)
+    local factoryHint = recovery:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    factoryHint:SetPoint("LEFT", factoryButton, "RIGHT", 10, 0)
+    factoryHint:SetPoint("RIGHT", recovery, "RIGHT", -12, 0)
+    factoryHint:SetJustifyH("LEFT")
+    factoryHint:SetText("clears all MCDM settings")
+    UI.SetTextFaint(factoryHint)
+
+    local scaling = CreatePanel(content, 808, 116)
+    scaling:SetPoint("TOPLEFT", quick, "BOTTOMLEFT", 0, -14)
+
+    local scalingTitle = scaling:CreateFontString(nil, "OVERLAY", "MidnightCDM_Font14")
+    scalingTitle:SetPoint("TOPLEFT", scaling, "TOPLEFT", 16, -12)
+    scalingTitle:SetText("Scaling")
+    UI.SetTextWhite(scalingTitle)
+
+    local scalingText = scaling:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    scalingText:SetPoint("TOPLEFT", scalingTitle, "BOTTOMLEFT", 0, -8)
+    scalingText:SetPoint("RIGHT", scaling, "RIGHT", -180, 0)
+    scalingText:SetJustifyH("LEFT")
+    scalingText:SetText("Changes only the MCDM options menu scale. Runtime icons, bars, and class resources are not affected.")
+    UI.SetTextSubtle(scalingText)
+
+    widgets.menuScaleValue = scaling:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    widgets.menuScaleValue:SetPoint("TOPRIGHT", scaling, "TOPRIGHT", -18, -18)
+    widgets.menuScaleValue:SetJustifyH("RIGHT")
+    UI.SetTextFaint(widgets.menuScaleValue)
+
+    widgets.menuScaleSlider = UI.CreateModernSlider(scaling, "Menu Scale", 50, 150, math.floor((GetMenuScale() * 100) + 0.5), SetMenuScalePercent, nil, 560)
+    widgets.menuScaleSlider:SetPoint("TOPLEFT", scaling, "TOPLEFT", 16, -62)
+
+    local resetScale = UI.CreateModernButton(scaling, "100%", 64, 24)
+    resetScale:SetPoint("TOPLEFT", widgets.menuScaleSlider, "TOPRIGHT", 14, -20)
+    resetScale:SetScript("OnClick", function()
+        SetMenuScalePercent(100)
+        if widgets.menuScaleSlider and widgets.menuScaleSlider.UpdateUIValue then
+            widgets.menuScaleSlider:UpdateUIValue(100)
+        end
+    end)
+
+    local smallScale = UI.CreateModernButton(scaling, "90%", 56, 24)
+    smallScale:SetPoint("LEFT", resetScale, "RIGHT", 8, 0)
+    smallScale:SetScript("OnClick", function()
+        SetMenuScalePercent(90)
+        if widgets.menuScaleSlider and widgets.menuScaleSlider.UpdateUIValue then
+            widgets.menuScaleSlider:UpdateUIValue(90)
+        end
+    end)
+
+    local largeScale = UI.CreateModernButton(scaling, "110%", 58, 24)
+    largeScale:SetPoint("LEFT", smallScale, "RIGHT", 8, 0)
+    largeScale:SetScript("OnClick", function()
+        SetMenuScalePercent(110)
+        if widgets.menuScaleSlider and widgets.menuScaleSlider.UpdateUIValue then
+            widgets.menuScaleSlider:UpdateUIValue(110)
+        end
+    end)
 
     local changelog = CreatePanel(content, 808, 126)
-    changelog:SetPoint("TOPLEFT", quick, "BOTTOMLEFT", 0, -14)
+    changelog:SetPoint("TOPLEFT", scaling, "BOTTOMLEFT", 0, -14)
 
     local changelogTitle = changelog:CreateFontString(nil, "OVERLAY", "MidnightCDM_Font14")
     changelogTitle:SetPoint("TOPLEFT", changelog, "TOPLEFT", 16, -12)
@@ -584,6 +718,35 @@ local function CreateDashboardTab(page)
     local changelogButton = UI.CreateModernButton(changelog, "View Changelog", 136, 24, "primary")
     changelogButton:SetPoint("RIGHT", changelog, "RIGHT", -16, 0)
     changelogButton:SetScript("OnClick", ShowChangelog)
+
+    local support = CreatePanel(content, 808, 122)
+    support:SetPoint("TOPLEFT", changelog, "BOTTOMLEFT", 0, -14)
+
+    local supportTitle = support:CreateFontString(nil, "OVERLAY", "MidnightCDM_Font14")
+    supportTitle:SetPoint("TOPLEFT", support, "TOPLEFT", 16, -12)
+    supportTitle:SetText("Support Midnight Simple Cooldown")
+    UI.SetTextWhite(supportTitle)
+
+    local supportText = support:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    supportText:SetPoint("TOPLEFT", supportTitle, "BOTTOMLEFT", 0, -8)
+    supportText:SetPoint("RIGHT", support, "RIGHT", -200, 0)
+    supportText:SetJustifyH("LEFT")
+    supportText:SetText("Support links are one click away. Buttons copy the link so the WoW client does not need to open a browser.")
+    UI.SetTextSubtle(supportText)
+
+    local version = tostring(GetAddonMetadata("Version") or "unknown")
+    local about = support:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    about:SetPoint("TOPLEFT", supportText, "BOTTOMLEFT", 0, -8)
+    about:SetPoint("RIGHT", support, "RIGHT", -200, 0)
+    about:SetJustifyH("LEFT")
+    about:SetText("v" .. version .. "  -  by Mapko  -  inspired by Ayije CDM")
+    UI.SetTextFaint(about)
+
+    CreateSupportButton(support, "Patreon", "https://www.patreon.com/cw/MidnightSimpleUnitframes", 16, -82, 88)
+    CreateSupportButton(support, "PayPal", "https://www.paypal.com/ncp/payment/H3N2P87S53KBQ", 112, -82, 82)
+    CreateSupportButton(support, "Ko-fi", "https://ko-fi.com/midnightsimpleunitframes#linkModal", 202, -82, 76)
+    CreateSupportButton(support, "GitHub", "https://github.com/Mapkov2/MidnightCooldownManager", 286, -82, 82)
+    CreateSupportButton(support, "Discord", "https://discord.gg/2Gf9b2Wprz", 376, -82, 86)
 
     page.Refresh = RefreshDashboard
     page:SetScript("OnShow", RefreshDashboard)
