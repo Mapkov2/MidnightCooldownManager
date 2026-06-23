@@ -51,15 +51,16 @@ local function SetTooltipOwner(tooltip, frame)
     tooltip:SetOwner(frame, anchor)
 end
 
-local function ShowResolvedTooltip(frame)
+local function ShowResolvedTooltip(ownerFrame)
     local tooltip = GameTooltip or _G.GameTooltip
     if not tooltip then return end
 
-    local kind, id = ResolveTooltipIDs(frame)
+    local dataFrame = (ownerFrame and ownerFrame.cdmTooltipOwner) or ownerFrame
+    local kind, id = ResolveTooltipIDs(dataFrame)
     if not kind then return end
 
     tooltip:Hide()
-    SetTooltipOwner(tooltip, frame)
+    SetTooltipOwner(tooltip, ownerFrame)
 
     local ok
     if kind == "item" then
@@ -116,32 +117,53 @@ function CDM:InstallRuntimeTooltip(frame, anchor)
 
     local tooltipAnchor = anchor or frame.cdmTooltipAnchor or "ANCHOR_RIGHT"
 
-    if frame.EnableMouse then
-        local ok = pcall(frame.EnableMouse, frame, true)
+    local hitbox = frame.cdmTooltipHitbox
+    if not hitbox then
+        local ok, created = pcall(CreateFrame, "Frame", nil, frame)
+        if not ok or not created then
+            QueueInstallAfterCombat(frame, tooltipAnchor)
+            return
+        end
+        hitbox = created
+        frame.cdmTooltipHitbox = hitbox
+        hitbox.cdmTooltipOwner = frame
+    end
+
+    local ok = pcall(hitbox.ClearAllPoints, hitbox)
+    if ok then
+        ok = pcall(hitbox.SetAllPoints, hitbox, frame)
+    end
+    if not ok then
+        QueueInstallAfterCombat(frame, tooltipAnchor)
+        return
+    end
+
+    if hitbox.SetFrameLevel and frame.GetFrameLevel then
+        pcall(hitbox.SetFrameLevel, hitbox, (frame:GetFrameLevel() or 0) + 20)
+    end
+
+    if hitbox.EnableMouse then
+        ok = pcall(hitbox.EnableMouse, hitbox, true)
         if not ok then
             QueueInstallAfterCombat(frame, tooltipAnchor)
             return
         end
     end
-    if frame.SetMouseMotionEnabled then
-        local ok = pcall(frame.SetMouseMotionEnabled, frame, true)
+    if hitbox.SetMouseMotionEnabled then
+        ok = pcall(hitbox.SetMouseMotionEnabled, hitbox, true)
         if not ok then
             QueueInstallAfterCombat(frame, tooltipAnchor)
             return
         end
     end
 
-    local ok
-    if frame.HookScript then
-        ok = pcall(frame.HookScript, frame, "OnEnter", ShowResolvedTooltip)
+    if hitbox.SetScript then
+        ok = pcall(hitbox.SetScript, hitbox, "OnEnter", ShowResolvedTooltip)
         if ok then
-            ok = pcall(frame.HookScript, frame, "OnLeave", HideTooltip)
+            ok = pcall(hitbox.SetScript, hitbox, "OnLeave", HideTooltip)
         end
     else
-        ok = pcall(frame.SetScript, frame, "OnEnter", ShowResolvedTooltip)
-        if ok then
-            ok = pcall(frame.SetScript, frame, "OnLeave", HideTooltip)
-        end
+        ok = false
     end
 
     if not ok then
@@ -151,12 +173,13 @@ function CDM:InstallRuntimeTooltip(frame, anchor)
 
     pendingInstallFrames[frame] = nil
     frame.cdmRuntimeTooltipInstalled = true
-    frame.cdmTooltipAnchor = tooltipAnchor
+    hitbox.cdmTooltipAnchor = tooltipAnchor
 end
 
 function CDM:RefreshRuntimeTooltip(frame)
     if not frame then return end
-    if frame.cdmRuntimeTooltipInstalled and frame:IsMouseOver() then
-        ShowResolvedTooltip(frame)
+    local hitbox = frame.cdmTooltipHitbox
+    if hitbox and hitbox:IsMouseOver() then
+        ShowResolvedTooltip(hitbox)
     end
 end
