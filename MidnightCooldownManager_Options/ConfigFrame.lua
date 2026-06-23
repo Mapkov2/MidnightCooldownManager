@@ -59,6 +59,9 @@ local COLORS = THEME and THEME.colors or {}
 local floor = math.floor
 local max = math.max
 local min = math.min
+local strfind = string.find
+local strsub = string.sub
+local tconcat = table.concat
 
 local function ClampNumber(value, minValue, maxValue, fallback)
     value = tonumber(value) or fallback or minValue
@@ -612,15 +615,133 @@ local categoryHeaders = {
     },
 }
 
+local searchScratchTokens = {}
+local searchKeyTermCache = {}
+local searchKeyCategoryByTab = ns.ConfigSearchCategoryByTab or {}
+
 local function NormalizeSearch(text)
     text = tostring(text or ""):lower()
-    return text:gsub("%s+", "")
+    text = text:gsub("\195\132", "ae"):gsub("\195\164", "ae")
+    text = text:gsub("\195\150", "oe"):gsub("\195\182", "oe")
+    text = text:gsub("\195\156", "ue"):gsub("\195\188", "ue")
+    text = text:gsub("\195\159", "ss")
+    text = text:gsub("([a-z])([A-Z])", "%1 %2")
+    text = text:gsub("([A-Z])([A-Z][a-z])", "%1 %2")
+    text = text:gsub("[^%w]+", " ")
+    text = text:gsub("%s+", " ")
+    text = text:gsub("^%s+", ""):gsub("%s+$", "")
+    return text
 end
 
-local function RowMatches(row, filter)
+local function CompactSearch(text)
+    return (text or ""):gsub("%s+", "")
+end
+
+local function ExpandConfigKeyForSearch(key)
+    key = tostring(key or "")
+    key = key:gsub("([a-z])([A-Z])", "%1 %2")
+    key = key:gsub("([A-Z])([A-Z][a-z])", "%1 %2")
+    key = key:gsub("_+", " ")
+    return key
+end
+
+local function GetConfigKeySearchTerms(tabID)
+    if searchKeyTermCache[tabID] ~= nil then
+        return searchKeyTermCache[tabID]
+    end
+
+    local categoryID = searchKeyCategoryByTab[tabID]
+    local categories = ns.ConfigKeys and ns.ConfigKeys.categories
+    local category = categoryID and categories and categories[categoryID]
+    if not category then
+        searchKeyTermCache[tabID] = ""
+        return ""
+    end
+
+    local terms = {}
+    terms[#terms + 1] = category.label or categoryID
+    for _, key in ipairs(category.keys or {}) do
+        terms[#terms + 1] = key
+        terms[#terms + 1] = ExpandConfigKeyForSearch(key)
+    end
+
+    local result = tconcat(terms, " ")
+    searchKeyTermCache[tabID] = result
+    return result
+end
+
+local function BuildRowSearch(label, groupLabel, tabRef, tabDef)
+    local tabID = (tabDef and tabDef.id) or (tabRef and tabRef.id)
+    local catalog = ns.ConfigSearchKeywords or {}
+    local text = tconcat({
+        label or "",
+        groupLabel or "",
+        (tabDef and tabDef.label) or "",
+        (tabRef and tabRef.terms) or "",
+        tabID or "",
+        catalog[tabID] or "",
+        GetConfigKeySearchTerms(tabID),
+    }, " ")
+    local normalized = NormalizeSearch(text)
+    return normalized, CompactSearch(normalized)
+end
+
+local function FillSearchTokens(filter)
+    wipe(searchScratchTokens)
+    if filter == "" then return searchScratchTokens end
+    for token in filter:gmatch("%S+") do
+        if token ~= "" then
+            searchScratchTokens[#searchScratchTokens + 1] = token
+        end
+    end
+    return searchScratchTokens
+end
+
+local function FuzzyTokenMatches(compactHaystack, token)
+    local tokenLen = #token
+    if tokenLen <= 1 then
+        return strfind(compactHaystack, token, 1, true) ~= nil
+    end
+
+    local found = strfind(compactHaystack, strsub(token, 1, 1), 1, true)
+    if not found then return false end
+
+    local pos = found + 1
+    local previous = found
+    local gapScore = 0
+    local maxGapScore = (tokenLen * 4) + 10
+
+    for i = 2, tokenLen do
+        found = strfind(compactHaystack, strsub(token, i, i), pos, true)
+        if not found then return false end
+        gapScore = gapScore + (found - previous - 1)
+        if gapScore > maxGapScore then return false end
+        previous = found
+        pos = found + 1
+    end
+
+    return true
+end
+
+local function RowMatches(row, filter, compactFilter, tokens)
     if filter == "" then return true end
+
     local haystack = row.searchText or ""
-    return haystack:find(filter, 1, true) ~= nil
+    if strfind(haystack, filter, 1, true) then return true end
+
+    local compactHaystack = row.searchCompact or ""
+    if compactFilter ~= "" and strfind(compactHaystack, compactFilter, 1, true) then return true end
+
+    for i = 1, #tokens do
+        local token = tokens[i]
+        if not strfind(haystack, token, 1, true)
+            and not FuzzyTokenMatches(compactHaystack, token)
+        then
+            return false
+        end
+    end
+
+    return #tokens > 0
 end
 
 local function RefreshNavHeaderVisual(group)
@@ -638,6 +759,8 @@ end
 local function ReflowNavigation()
     if not navSearchBox then return end
     local filter = NormalizeSearch(navSearchBox:GetText())
+    local compactFilter = CompactSearch(filter)
+    local tokens = FillSearchTokens(filter)
     local navParent = navScrollChild
     if not navParent then return end
     local y = -2
@@ -645,7 +768,9 @@ local function ReflowNavigation()
     for _, group in ipairs(navGroups) do
         local visibleRows = 0
         for _, row in ipairs(group.rows) do
-            if RowMatches(row, filter) then
+            local matched = RowMatches(row, filter, compactFilter, tokens)
+            row.searchVisible = matched
+            if matched then
                 visibleRows = visibleRows + 1
             end
         end
@@ -661,7 +786,7 @@ local function ReflowNavigation()
 
         local showChildren = showGroup and (filter ~= "" or group.open ~= false)
         for _, row in ipairs(group.rows) do
-            local showRow = showChildren and RowMatches(row, filter)
+            local showRow = showChildren and row.searchVisible
             row.button:SetShown(showRow)
             if showRow then
                 row.button:ClearAllPoints()
@@ -1070,7 +1195,7 @@ local function CreateNavigation(Sidebar)
     navSearchBox:SetPoint("TOPRIGHT", Sidebar, "TOPRIGHT", -10, -10)
     navSearchBox:SetHeight(20)
     navSearchBox:SetMaxLetters(48)
-    UI.AttachPlaceholder(navSearchBox, "Search MSC...")
+    UI.AttachPlaceholder(navSearchBox, "Search MCDM...")
     navSearchBox:SetScript("OnTextChanged", ReflowNavigation)
     navSearchBox:SetScript("OnEscapePressed", function(self)
         self:SetText("")
@@ -1107,10 +1232,12 @@ local function CreateNavigation(Sidebar)
                 btn.Text = btn._mcdmLabel
                 buttons[tabDef.id] = btn
 
+                local searchText, searchCompact = BuildRowSearch(label, groupDef.label, tabRef, tabDef)
                 local row = {
                     button = btn,
                     id = tabDef.id,
-                    searchText = NormalizeSearch((label or "") .. " " .. (tabDef.label or "") .. " " .. (tabRef.terms or "")),
+                    searchText = searchText,
+                    searchCompact = searchCompact,
                 }
                 navRows[#navRows + 1] = row
                 group.rows[#group.rows + 1] = row
