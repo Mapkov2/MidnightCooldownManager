@@ -819,7 +819,7 @@ local function CreatePreview(parent)
     end
 
     local DRAG_DEFS = {
-        resource = { label = "Class Resource", xKey = "resourceOffsetX", yKey = "resourceOffsetY", fallbackX = 0, fallbackY = 22, minX = -800, maxX = 800, minY = -800, maxY = 800 },
+        resource = { label = "Class Resource", xKey = "resourceOffsetX", yKey = "resourceOffsetY", fallbackX = 0, fallbackY = 18, minX = -800, maxX = 800, minY = -800, maxY = 800 },
         power = { label = "Player Power", xKey = "resourcePowerBarOffsetX", yKey = "resourcePowerBarOffsetY", fallbackX = 0, fallbackY = -4, minX = -800, maxX = 800, minY = -800, maxY = 800 },
         hp = { label = "Second HP", xKey = "resourceHPBarOffsetX", yKey = "resourceHPBarOffsetY", fallbackX = 0, fallbackY = -18, minX = -800, maxX = 800, minY = -800, maxY = 800 },
     }
@@ -1291,7 +1291,7 @@ local function CreatePreview(parent)
         if continuous then count = 1 end
         resource:SetSize(width, height)
         resource:ClearAllPoints()
-        resource:SetPoint("BOTTOM", ref, "TOP", tonumber(CDM.db.resourceOffsetX) or 0, PREVIEW_RESOURCE_BASE_Y + (tonumber(ReadValue("resourceOffsetY", 22)) or 22))
+        resource:SetPoint("BOTTOM", ref, "TOP", tonumber(CDM.db.resourceOffsetX) or 0, PREVIEW_RESOURCE_BASE_Y + (tonumber(ReadValue("resourceOffsetY", 18)) or 18))
         resource:SetShown(LayerOn("resource"))
         SetMeterBorder(resource, LayerOn("resource") and LayerOn("border"), "resourceOutline")
 
@@ -1805,7 +1805,7 @@ local function CreateResourcesTab(page)
     xSlider:SetPoint("TOPLEFT", 0, y)
     y = y - 45
 
-    local ySlider = UI.CreateModernSlider(anchorBody, "Y Offset", -800, 800, CDM.db.resourceOffsetY or CDM.defaults.resourceOffsetY or 22, function(v)
+    local ySlider = UI.CreateModernSlider(anchorBody, "Y Offset", -800, 800, CDM.db.resourceOffsetY or CDM.defaults.resourceOffsetY or 18, function(v)
         CDM.db.resourceOffsetY = UI.RoundToInt(v)
         SaveAndRefresh()
     end)
