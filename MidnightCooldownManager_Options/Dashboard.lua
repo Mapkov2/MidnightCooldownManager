@@ -9,6 +9,7 @@ local UI = ns.ConfigUI
 local dashboardPage = nil
 local dashboardWidgets = nil
 local RefreshDashboard
+local pendingMenuScalePercent = nil
 
 local function CountEntries(tbl)
     if type(tbl) ~= "table" then return 0 end
@@ -140,6 +141,24 @@ local function GetMenuScale()
     return 1
 end
 
+local function ClampMenuScalePercent(percent)
+    percent = tonumber(percent) or 100
+    if percent < 50 then
+        return 50
+    elseif percent > 150 then
+        return 150
+    end
+    return math.floor(percent + 0.5)
+end
+
+local function GetAppliedMenuScalePercent()
+    return ClampMenuScalePercent((GetMenuScale() or 1) * 100)
+end
+
+local function GetSelectedMenuScalePercent()
+    return ClampMenuScalePercent(pendingMenuScalePercent or GetAppliedMenuScalePercent())
+end
+
 local function SetMenuScale(scale)
     scale = tonumber(scale) or 1
     if scale < 0.50 then
@@ -153,17 +172,48 @@ local function SetMenuScale(scale)
     return scale
 end
 
-local function SetMenuScalePercent(percent)
-    percent = tonumber(percent) or 100
-    if percent < 50 then
-        percent = 50
-    elseif percent > 150 then
-        percent = 150
+local function RefreshMenuScaleControls()
+    local widgets = dashboardWidgets
+    if not widgets then return end
+
+    local applied = GetAppliedMenuScalePercent()
+    local selected = GetSelectedMenuScalePercent()
+    local changed = applied ~= selected
+
+    if widgets.menuScaleValue then
+        SetText(widgets.menuScaleValue, string.format("Applied: %d%%  Selected: %d%%", applied, selected))
     end
-    local applied = SetMenuScale(percent / 100)
-    if dashboardWidgets and dashboardWidgets.menuScaleValue then
-        SetText(dashboardWidgets.menuScaleValue, string.format("Menu %d%%", math.floor((applied * 100) + 0.5)))
+    if widgets.menuScaleSlider and widgets.menuScaleSlider.UpdateUIValue then
+        widgets.menuScaleSlider:UpdateUIValue(selected)
     end
+    if widgets.menuScaleApply then
+        if widgets.menuScaleApply.SetEnabled then
+            widgets.menuScaleApply:SetEnabled(changed)
+        end
+        if widgets.menuScaleApply.SetActive then
+            widgets.menuScaleApply:SetActive(changed)
+        end
+    end
+    if widgets.menuScaleRevert and widgets.menuScaleRevert.SetEnabled then
+        widgets.menuScaleRevert:SetEnabled(changed)
+    end
+end
+
+local function StageMenuScalePercent(percent)
+    pendingMenuScalePercent = ClampMenuScalePercent(percent)
+    RefreshMenuScaleControls()
+end
+
+local function ApplyPendingMenuScale()
+    local selected = GetSelectedMenuScalePercent()
+    SetMenuScale(selected / 100)
+    pendingMenuScalePercent = nil
+    RefreshMenuScaleControls()
+end
+
+local function RevertPendingMenuScale()
+    pendingMenuScalePercent = nil
+    RefreshMenuScaleControls()
 end
 
 local function ShowFactoryReset()
@@ -562,13 +612,7 @@ function RefreshDashboard()
             widgets.moveButton:SetEnabled(not inCombat)
         end
     end
-    local menuScalePct = math.floor((GetMenuScale() * 100) + 0.5)
-    if widgets.menuScaleValue then
-        SetText(widgets.menuScaleValue, string.format("Menu %d%%", menuScalePct))
-    end
-    if widgets.menuScaleSlider and widgets.menuScaleSlider.UpdateUIValue then
-        widgets.menuScaleSlider:UpdateUIValue(menuScalePct)
-    end
+    RefreshMenuScaleControls()
     if widgets.cooldownTooltipToggle then
         widgets.cooldownTooltipToggle:SetChecked(ReadDBBool("tooltipsCooldownsEnabled"))
     end
@@ -595,7 +639,7 @@ local function CreateDashboardTab(page)
     dashboardPage = page
     dashboardWidgets = {}
 
-    local content = UI.CreateScrollableTab(page, "MidnightCDM_DashboardScrollFrame", 1040, 930)
+    local content = UI.CreateScrollableTab(page, "MidnightCDM_DashboardScrollFrame", 1040, 980)
     local widgets = dashboardWidgets
 
     local hero = CreatePanel(content, 808, 88)
@@ -721,7 +765,7 @@ local function CreateDashboardTab(page)
     widgets.buffTooltipToggle:SetPoint("LEFT", widgets.cooldownTooltipToggle, "RIGHT", 42, 0)
     widgets.buffTooltipToggle:SetWidth(220)
 
-    local scaling = CreatePanel(content, 808, 116)
+    local scaling = CreatePanel(content, 808, 160)
     scaling:SetPoint("TOPLEFT", tooltips, "BOTTOMLEFT", 0, -14)
 
     local scalingTitle = scaling:CreateFontString(nil, "OVERLAY", "MidnightCDM_Font14")
@@ -737,38 +781,38 @@ local function CreateDashboardTab(page)
     UI.SetTextSubtle(scalingText)
 
     widgets.menuScaleValue = scaling:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    widgets.menuScaleValue:SetPoint("TOPRIGHT", scaling, "TOPRIGHT", -18, -18)
-    widgets.menuScaleValue:SetJustifyH("RIGHT")
+    widgets.menuScaleValue:SetPoint("TOPLEFT", scalingText, "BOTTOMLEFT", 0, -8)
+    widgets.menuScaleValue:SetPoint("RIGHT", scaling, "RIGHT", -18, 0)
+    widgets.menuScaleValue:SetJustifyH("LEFT")
     UI.SetTextFaint(widgets.menuScaleValue)
 
-    widgets.menuScaleSlider = UI.CreateModernSlider(scaling, "Menu Scale", 50, 150, math.floor((GetMenuScale() * 100) + 0.5), SetMenuScalePercent, nil, 560)
-    widgets.menuScaleSlider:SetPoint("TOPLEFT", scaling, "TOPLEFT", 16, -62)
+    widgets.menuScaleSlider = UI.CreateModernSlider(scaling, "Menu Scale", 50, 150, GetSelectedMenuScalePercent(), StageMenuScalePercent, nil, 560)
+    widgets.menuScaleSlider:SetPoint("TOPLEFT", scaling, "TOPLEFT", 16, -72)
+
+    widgets.menuScaleApply = UI.CreateModernButton(scaling, "Apply", 72, 22, "primary")
+    widgets.menuScaleApply:SetPoint("TOPLEFT", widgets.menuScaleSlider, "BOTTOMLEFT", 0, -6)
+    widgets.menuScaleApply:SetScript("OnClick", ApplyPendingMenuScale)
+
+    widgets.menuScaleRevert = UI.CreateModernButton(scaling, "Revert", 82, 22)
+    widgets.menuScaleRevert:SetPoint("LEFT", widgets.menuScaleApply, "RIGHT", 8, 0)
+    widgets.menuScaleRevert:SetScript("OnClick", RevertPendingMenuScale)
 
     local resetScale = UI.CreateModernButton(scaling, "100%", 64, 24)
     resetScale:SetPoint("TOPLEFT", widgets.menuScaleSlider, "TOPRIGHT", 14, -20)
     resetScale:SetScript("OnClick", function()
-        SetMenuScalePercent(100)
-        if widgets.menuScaleSlider and widgets.menuScaleSlider.UpdateUIValue then
-            widgets.menuScaleSlider:UpdateUIValue(100)
-        end
+        StageMenuScalePercent(100)
     end)
 
     local smallScale = UI.CreateModernButton(scaling, "90%", 56, 24)
     smallScale:SetPoint("LEFT", resetScale, "RIGHT", 8, 0)
     smallScale:SetScript("OnClick", function()
-        SetMenuScalePercent(90)
-        if widgets.menuScaleSlider and widgets.menuScaleSlider.UpdateUIValue then
-            widgets.menuScaleSlider:UpdateUIValue(90)
-        end
+        StageMenuScalePercent(90)
     end)
 
     local largeScale = UI.CreateModernButton(scaling, "110%", 58, 24)
     largeScale:SetPoint("LEFT", smallScale, "RIGHT", 8, 0)
     largeScale:SetScript("OnClick", function()
-        SetMenuScalePercent(110)
-        if widgets.menuScaleSlider and widgets.menuScaleSlider.UpdateUIValue then
-            widgets.menuScaleSlider:UpdateUIValue(110)
-        end
+        StageMenuScalePercent(110)
     end)
 
     local changelog = CreatePanel(content, 808, 126)
