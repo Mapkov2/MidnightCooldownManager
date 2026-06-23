@@ -315,7 +315,10 @@ local function MinimizeConfigWindow(frame)
     frame = frame or ConfigFrame or ns.ConfigFrame
     if not (frame and minimizedBar) then return false end
     frame._mcdmMinimized = true
-    if minimizedBar.title then minimizedBar.title:SetText("MSC Menu") end
+    if minimizedBar.title then
+        local title = frame.title and frame.title.GetText and frame.title:GetText()
+        minimizedBar.title:SetText((title and title ~= "" and title) or "MCDM Menu")
+    end
     minimizedBar:Show()
     frame:Hide()
     return true
@@ -693,6 +696,21 @@ local function SetHeaderButtonTooltip(btn, title, text)
     end)
 end
 
+local function AttachWindowControlTooltip(btn, title, text)
+    if not btn or not btn.HookScript then return end
+    btn:HookScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
+        GameTooltip:SetText(title)
+        if text then
+            GameTooltip:AddLine(text, 0.75, 0.82, 0.92, true)
+        end
+        GameTooltip:Show()
+    end)
+    btn:HookScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+end
+
 local function CreateHeaderActionButtons(parent)
     local settingsBtn = UI.CreateActionButton(parent, L["Settings"], 92, 22, "danger")
     settingsBtn:SetPoint("TOPLEFT", parent, "TOPLEFT", 12, -5)
@@ -781,13 +799,14 @@ local function CreateMinimizedBar(frame)
     title:SetPoint("LEFT", bar, "LEFT", 12, 0)
     title:SetPoint("RIGHT", bar, "RIGHT", -62, 0)
     title:SetJustifyH("LEFT")
-    title:SetText("MSC Menu")
+    title:SetText("MCDM Menu")
     UI.SetTextColor(title, COLORS.accent)
     bar.title = title
 
     local restore = UI.CreateWindowControlButton and UI.CreateWindowControlButton(bar, "maximize") or UI.CreateModernButton(bar, "", 24, 24)
     restore:SetPoint("RIGHT", bar, "RIGHT", -31, 0)
     restore:SetScript("OnClick", function() RestoreMinimizedConfigWindow(frame) end)
+    AttachWindowControlTooltip(restore, "Restore", "Restore the minimized MCDM menu.")
     bar.restoreButton = restore
 
     local close = UI.CreateCloseButton and UI.CreateCloseButton(bar) or CreateCloseButton(bar)
@@ -1109,6 +1128,23 @@ local function CreateConfigFrame()
     closeButton:SetPoint("TOPRIGHT", ConfigFrame, "TOPRIGHT", -4, -4)
     ConfigFrame.closeButton = closeButton
 
+    local maximizeButton = UI.CreateWindowControlButton and UI.CreateWindowControlButton(ConfigFrame, "maximize") or UI.CreateActionButton(ConfigFrame, "", 24, 24)
+    maximizeButton:SetPoint("TOPRIGHT", closeButton, "TOPLEFT", -2, 0)
+    maximizeButton:SetScript("OnClick", function()
+        MaximizeConfigWindow(ConfigFrame)
+    end)
+    AttachWindowControlTooltip(maximizeButton, "Maximize", "Maximize or restore the MCDM menu window.")
+    ConfigFrame.maximizeButton = maximizeButton
+
+    local minimizeButton = UI.CreateWindowControlButton and UI.CreateWindowControlButton(ConfigFrame, "minimize") or UI.CreateActionButton(ConfigFrame, "", 24, 24)
+    minimizeButton:SetPoint("TOPRIGHT", maximizeButton, "TOPLEFT", -2, 0)
+    minimizeButton:SetScript("OnClick", function()
+        if not minimizedBar then CreateMinimizedBar(ConfigFrame) end
+        MinimizeConfigWindow(ConfigFrame)
+    end)
+    AttachWindowControlTooltip(minimizeButton, "Minimize", "Collapse the MCDM menu to a small taskbar-style bar.")
+    ConfigFrame.minimizeButton = minimizeButton
+
     local ShellContent = CreateFrame("Frame", nil, ConfigFrame)
     ShellContent:SetPoint("TOPLEFT", ConfigFrame, "TOPLEFT", 8, -30)
     ShellContent:SetPoint("BOTTOMRIGHT", ConfigFrame, "BOTTOMRIGHT", -8, 8)
@@ -1185,6 +1221,7 @@ local function CreateConfigFrame()
     end
 
     CreateNavigation(Sidebar)
+    CreateMinimizedBar(ConfigFrame)
     AttachWindowInteractions(ConfigFrame)
 
     local initialTab = (ns.ConfigTabs and ns.ConfigTabs.layout) and "layout" or (sortedTabs[1] and sortedTabs[1].id)
