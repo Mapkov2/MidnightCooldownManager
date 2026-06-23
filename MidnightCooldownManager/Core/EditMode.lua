@@ -271,6 +271,21 @@ local function HasCooldownViewerEditModeApis()
 end
 
 local EDIT_MODE_VIEWER_CATALOG
+local function GetCooldownViewerSystemIndexForName(viewerName)
+    local SI = Enum and Enum.EditModeCooldownViewerSystemIndices
+    if not SI then return nil end
+    if viewerName == VIEWERS.ESSENTIAL then
+        return SI.Essential
+    elseif viewerName == VIEWERS.UTILITY then
+        return SI.Utility
+    elseif viewerName == VIEWERS.BUFF then
+        return SI.BuffIcon
+    elseif viewerName == VIEWERS.BUFF_BAR then
+        return SI.BuffBar
+    end
+    return nil
+end
+
 local function BuildEditModeViewerCatalog()
     local catalog = {
         order = {},
@@ -443,6 +458,20 @@ local function GetPolicies()
         },
     }
     for _, policy in ipairs(POLICIES) do
+        if policy.setting == nil or policy.recommendedValue == nil then
+            policy._mcdmUnsupported = true
+        end
+    end
+
+    local filteredPolicies = {}
+    for _, policy in ipairs(POLICIES) do
+        if not policy._mcdmUnsupported then
+            filteredPolicies[#filteredPolicies + 1] = policy
+        end
+    end
+    POLICIES = filteredPolicies
+
+    for _, policy in ipairs(POLICIES) do
         local set = {}
         for _, idx in ipairs(policy.systemIndices) do
             set[idx] = true
@@ -450,6 +479,78 @@ local function GetPolicies()
         policy.systemIndexSet = set
     end
     return POLICIES
+end
+
+function CDM:InvalidateCooldownViewerEditModeCache()
+    self._cooldownViewerTooltipAllowedByName = nil
+end
+
+local function IsTruthySetting(value)
+    return value == true or value == 1
+end
+
+local function BuildTooltipAllowedByViewerName()
+    local allowedByName = {
+        [VIEWERS.ESSENTIAL] = true,
+        [VIEWERS.UTILITY] = true,
+        [VIEWERS.BUFF] = true,
+        [VIEWERS.BUFF_BAR] = true,
+    }
+
+    local setting = Enum
+        and Enum.EditModeCooldownViewerSetting
+        and Enum.EditModeCooldownViewerSetting.ShowTooltips
+    if not setting or not HasCooldownViewerEditModeApis() then
+        return allowedByName
+    end
+
+    local activeLayout = GetActiveLayout(GetLayoutInfo())
+    if not activeLayout then
+        return allowedByName
+    end
+
+    local cooldownSystem = Enum.EditModeSystem.CooldownViewer
+    for _, systemInfo in ipairs(activeLayout.systems) do
+        if systemInfo.system == cooldownSystem and type(systemInfo.settings) == "table" then
+            local viewerName
+            if systemInfo.systemIndex == GetCooldownViewerSystemIndexForName(VIEWERS.ESSENTIAL) then
+                viewerName = VIEWERS.ESSENTIAL
+            elseif systemInfo.systemIndex == GetCooldownViewerSystemIndexForName(VIEWERS.UTILITY) then
+                viewerName = VIEWERS.UTILITY
+            elseif systemInfo.systemIndex == GetCooldownViewerSystemIndexForName(VIEWERS.BUFF) then
+                viewerName = VIEWERS.BUFF
+            elseif systemInfo.systemIndex == GetCooldownViewerSystemIndexForName(VIEWERS.BUFF_BAR) then
+                viewerName = VIEWERS.BUFF_BAR
+            end
+
+            if viewerName then
+                local current = GetSettingValue(systemInfo.settings, setting)
+                if current ~= nil then
+                    allowedByName[viewerName] = IsTruthySetting(current)
+                end
+            end
+        end
+    end
+
+    return allowedByName
+end
+
+function CDM:IsRuntimeTooltipAllowed(frameOrViewerName)
+    local viewerName = frameOrViewerName
+    if type(frameOrViewerName) ~= "string" then
+        local frame = frameOrViewerName
+        viewerName = frame and frame.cdmViewerName
+    end
+
+    if not viewerName then
+        return true
+    end
+
+    if not self._cooldownViewerTooltipAllowedByName then
+        self._cooldownViewerTooltipAllowedByName = BuildTooltipAllowedByViewerName()
+    end
+
+    return self._cooldownViewerTooltipAllowedByName[viewerName] ~= false
 end
 
 function CDM:GetCooldownViewerEditModePolicies()
@@ -570,6 +671,9 @@ function CDM:ApplyCooldownViewerEditModeRecommendedSettings(policyIds)
 
     self._isApplyingCooldownViewerPolicy = true
     C_EditMode.SaveLayouts(layoutInfo)
+    if self.InvalidateCooldownViewerEditModeCache then
+        self:InvalidateCooldownViewerEditModeCache()
+    end
 
     if EditModeManagerFrame then
         EditModeManagerFrame:Show()
@@ -580,3 +684,11 @@ function CDM:ApplyCooldownViewerEditModeRecommendedSettings(policyIds)
 
     return "applied"
 end
+
+local editModeCacheEvents = CreateFrame("Frame")
+pcall(editModeCacheEvents.RegisterEvent, editModeCacheEvents, "EDIT_MODE_LAYOUTS_UPDATED")
+editModeCacheEvents:SetScript("OnEvent", function()
+    if CDM.InvalidateCooldownViewerEditModeCache then
+        CDM:InvalidateCooldownViewerEditModeCache()
+    end
+end)
