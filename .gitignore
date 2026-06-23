@@ -1,8 +1,12 @@
 dist/
 _backups/
 _release-stage/
+.pkgmeta
+.github/workflows/release.yml
+tools/package-release.ps1
+tools/publish-curseforge.ps1
+tools/publish-wago.ps1
 *.zip
 *.log
 .DS_Store
 Thumbs.db
-

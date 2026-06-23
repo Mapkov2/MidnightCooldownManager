@@ -21,8 +21,3 @@ jobs:
       - name: Validate addon tree
         shell: pwsh
         run: ./tools/validate.ps1
-
-      - name: Build release package
-        shell: pwsh
-        run: ./tools/package-release.ps1
-
