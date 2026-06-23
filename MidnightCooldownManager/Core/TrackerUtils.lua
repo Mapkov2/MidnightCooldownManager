@@ -203,6 +203,9 @@ function CDM.CreateTrackerIcon(parent, namePrefix, id, opts)
     end
     local frame = CreateFrame("Frame", frameName, parent)
     frame:SetSize(size.w, size.h)
+    if CDM.InstallRuntimeTooltip then
+        CDM:InstallRuntimeTooltip(frame)
+    end
 
     local icon = frame:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints()

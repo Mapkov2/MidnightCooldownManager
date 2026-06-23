@@ -236,6 +236,9 @@ function CDM:SetupViewer(vName)
 
     CDM:InstallCooldownViewerAcquireCallback(v, "main", function(itemFrame)
         InstallCooldownRecordLifecycleHook(itemFrame)
+        if CDM.InstallRuntimeTooltip then
+            CDM:InstallRuntimeTooltip(itemFrame)
+        end
         InstallScaleLockHook(itemFrame)
         CDM:RestoreCooldownTextIfHidden(itemFrame)
         CDM:RestoreVisualsIfHidden(itemFrame)

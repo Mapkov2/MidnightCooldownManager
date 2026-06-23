@@ -32,6 +32,7 @@ Core\Pixel.lua
 Core\Border.lua
 Core\CooldownViewerCompat.lua
 Core\CooldownRecord.lua
+Core\Tooltips.lua
 Core\CooldownIndex.lua
 Core\GroupMatcher.lua
 Core\SpellUtils.lua

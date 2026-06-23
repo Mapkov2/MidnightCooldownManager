@@ -155,6 +155,11 @@ end
 local function OnButtonUpdate(button, buttonInfo)
     if not isEnabled then return end
 
+    local spellID = buttonInfo and (buttonInfo.spellID or buttonInfo.auraSpellID or buttonInfo.spellId)
+    if CDM.IsSafeNumber and CDM.IsSafeNumber(spellID) and spellID > 0 then
+        button.spellID = spellID
+    end
+
     SetCooldownFromButtonInfo(button, buttonInfo)
 
     button.Duration:Hide()
@@ -185,6 +190,10 @@ local function InitializeExternals()
 
     for _, button in ipairs(ExternalDefensivesFrame.auraFrames) do
         if not button.isAuraAnchor then
+            if CDM.InstallRuntimeTooltip then
+                CDM:InstallRuntimeTooltip(button)
+            end
+
             local cd = CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
             cd:SetAllPoints(button)
             cd:SetDrawEdge(false)
