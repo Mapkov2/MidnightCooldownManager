@@ -413,7 +413,7 @@ end
 
 local function CreatePreview(parent)
     local frame = UI.CreatePanel(parent, nil, { r = 0.010, g = 0.014, b = 0.026, a = 0.86 }, UI.Theme.colors.borderSoft)
-    frame:SetSize(900, 388)
+    frame:SetSize(900, 418)
     frame.previewKey = "current"
     frame.previewZoom = 1
     frame.layerVisibility = {}
@@ -593,14 +593,14 @@ local function CreatePreview(parent)
     UI.SetTextColor(title, UI.Theme.colors.accent)
 
     local hint = frame:CreateFontString(nil, "ARTWORK", "MidnightCDM_Font12")
-    hint:SetPoint("LEFT", title, "RIGHT", 16, 0)
+    hint:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -5)
     hint:SetPoint("RIGHT", frame, "RIGHT", -332, 0)
     hint:SetJustifyH("LEFT")
-    hint:SetText("Ctrl+wheel zoom - right/Ctrl-drag pans - drag bars - arrows nudge selected")
+    hint:SetText("Ctrl+wheel zoom - right/Ctrl-drag pans - drag bars - arrows move selected")
     UI.SetTextMuted(hint)
 
     local label = frame:CreateFontString(nil, "ARTWORK", "MidnightCDM_Font12")
-    label:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -292, -12)
+    label:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -286, -10)
     label:SetText("Preview Resource")
     UI.SetTextSubtle(label)
 
@@ -616,14 +616,14 @@ local function CreatePreview(parent)
     previewDropdown:SetDefaultText("Current Character")
 
     local summary = frame:CreateFontString(nil, "ARTWORK", "MidnightCDM_Font12")
-    summary:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -32)
+    summary:SetPoint("TOPLEFT", hint, "BOTTOMLEFT", 0, -4)
     summary:SetPoint("RIGHT", frame, "RIGHT", -14, 0)
     summary:SetJustifyH("LEFT")
     UI.SetTextMuted(summary)
     frame.summary = summary
 
     local canvas = UI.CreatePanel(frame, nil, { r = 0.000, g = 0.000, b = 0.000, a = 1.000 }, UI.Theme.colors.borderSoft)
-    canvas:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -58)
+    canvas:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -88)
     canvas:SetSize(748, 300)
     if canvas.SetClipsChildren then canvas:SetClipsChildren(true) end
     frame.canvas = canvas
