@@ -2,7 +2,7 @@
 ## Title: MidnightCooldownManager Options
 ## Notes: Load-on-demand superellipse options UI for MidnightCooldownManager.
 ## Author: Mapko
-## Version: 1.0 Beta
+## Version: 1.0.1 Beta
 ## DefaultState: enabled
 ## LoadOnDemand: 1
 ## Dependencies: MidnightCooldownManager

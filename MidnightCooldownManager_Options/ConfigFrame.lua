@@ -303,7 +303,17 @@ local function GetAddonVersionText()
         return nil
     end
 
-    return "v" .. tostring(version)
+    version = tostring(version)
+    if version:lower():find("beta", 1, true) then
+        local baseVersion = version:gsub("%s*[Bb][Ee][Tt][Aa].*$", "")
+        baseVersion = baseVersion:gsub("%s+$", "")
+        if baseVersion == "" then
+            baseVersion = version
+        end
+        return "v" .. baseVersion .. "  |cffffd24aBETA|r"
+    end
+
+    return "v" .. version
 end
 
 local function ApplyFooterTextStyle(fontString)
@@ -323,11 +333,30 @@ local function ApplyFooterTextStyle(fontString)
     end
 end
 
+local function ApplyVersionTextStyle(fontString)
+    if not fontString then return end
+
+    local db = CDM.db or {}
+    local defaults = CDM.defaults or {}
+    local fontName = db.textFont or defaults.textFont or "Friz Quadrata TT"
+    local fontPath = (LSM and LSM:Fetch("font", fontName)) or CDM_C.FONT_PATH
+    local fontSize = (CDM.Pixel and CDM.Pixel.FontSize(15)) or 15
+
+    fontString:SetFontObject("GameFontHighlight")
+    local setOk = fontString:SetFont(fontPath, fontSize, "OUTLINE")
+    if not setOk then
+        fontString:SetFont(STANDARD_TEXT_FONT, fontSize, "OUTLINE")
+    end
+    if fontString.SetTextColor then
+        fontString:SetTextColor(COLORS.text.r, COLORS.text.g, COLORS.text.b, 0.96)
+    end
+end
+
 local function ApplyAllFooterTextStyles()
     local currentFont = CDM.db and CDM.db.textFont
     if currentFont == lastFooterFont then return end
     lastFooterFont = currentFont
-    ApplyFooterTextStyle(versionText)
+    ApplyVersionTextStyle(versionText)
     ApplyFooterTextStyle(discordText)
     ApplyFooterTextStyle(twitchText)
 end
@@ -1447,10 +1476,9 @@ local function CreateConfigFrame()
 
     versionText = statusBar:CreateFontString(nil, "OVERLAY")
     versionText:SetPoint("RIGHT", statusBar, "RIGHT", -10, 0)
-    ApplyFooterTextStyle(versionText)
+    ApplyVersionTextStyle(versionText)
     versionText:SetText(GetAddonVersionText() or "")
-    UI.SetTextFaint(versionText)
-    versionText:SetAlpha(0.55)
+    versionText:SetAlpha(0.96)
 
     local ContentHost = CreateFrame("Frame", nil, Host)
     ContentHost:SetPoint("TOPLEFT", statusBar, "BOTTOMLEFT", 0, 0)

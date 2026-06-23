@@ -3,10 +3,23 @@ local CDM = _G[AddonName]
 if not CDM then return end
 
 local data = {
-    currentVersion = "1.0 Beta",
-    previousVersion = "0.2.0-port",
-    rangeLabel = "0.2.0-port -> 1.0 Beta",
+    currentVersion = "1.0.1 Beta",
+    previousVersion = "1.0 Beta",
+    rangeLabel = "1.0 Beta -> 1.0.1 Beta",
     entries = {
+        {
+            version = "1.0.1 Beta",
+            date = "2026-06-23",
+            sections = {
+                {
+                    title = "Release Context",
+                    bullets = {
+                        "Made the in-menu version label more readable and marked beta builds explicitly.",
+                        "Kept the release in beta while continuing 12.1 PTR and retail validation.",
+                    },
+                },
+            },
+        },
         {
             version = "1.0 Beta",
             date = "2026-06-23",
