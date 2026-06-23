@@ -32,8 +32,8 @@ foreach ($dir in $addonDirs) {
     }
 
     $toc = Get-Content -LiteralPath $tocPath -Raw
-    if ($toc -notmatch '(?m)^## Interface:\s*120000\s*$') {
-        Fail "$dir must use ## Interface: 120000"
+    if ($toc -notmatch '(?m)^## Interface:\s*120007\s*,\s*120100\s*$') {
+        Fail "$dir must use ## Interface: 120007, 120100"
     }
     if ($toc -notmatch '(?m)^## Version:\s*\S') {
         Fail "$dir has no TOC version"

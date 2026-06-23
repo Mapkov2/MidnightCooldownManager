@@ -94,8 +94,14 @@ local function SmokeCheck(result, condition, label, passValue, failValue, warnOn
     end
 end
 
-local function IsInterface120000(value)
-    return tostring(value or "") == "120000"
+local function IsSupportedInterfaceVersion(value)
+    local text = tostring(value or "")
+    for token in string.gmatch(text, "[^,%s]+") do
+        if token == "120007" or token == "120100" then
+            return true
+        end
+    end
+    return false
 end
 
 local function NormalizeInterfaceVersion(value)
@@ -201,7 +207,7 @@ function CDM:RunCooldownSmokeDiagnostic()
     PrintSmokeLine("INFO", "wowVersion", tostring(wowVersion or "unknown") .. " build=" .. tostring(wowBuild or "unknown") .. " date=" .. tostring(wowDate or "unknown"))
     PrintSmokeLine("INFO", "wowInterface", wowInterface or "unknown")
     PrintSmokeLine("INFO", "specID", diag.specID or "none")
-    SmokeCheck(result, IsInterface120000(tocInterface), "tocInterface120000", tocInterface, tocInterface)
+    SmokeCheck(result, IsSupportedInterfaceVersion(tocInterface), "tocInterface120007Or120100", tocInterface, tocInterface)
     SmokeCheck(result, diag.dataReady == true, "dataReady", "true", "false")
     SmokeCheck(result, compat.hasCooldownInfoAPI == true, "cooldownInfoAPI", "available", "missing")
     SmokeCheck(result, compat.hasCategorySetAPI == true, "categorySetAPI", "available", "missing")

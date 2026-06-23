@@ -1,4 +1,4 @@
-## Interface: 120000
+## Interface: 120007, 120100
 ## Title: |cff38c7f0Midnight|r |cffd7e4ffSimple Cooldown|r
 ## Notes: Cooldown, buff icon, buff bar, and class resource manager with a Midnight superellipse frontend.
 ## Author: Mapko
