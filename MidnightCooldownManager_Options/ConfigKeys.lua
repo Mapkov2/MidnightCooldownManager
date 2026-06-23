@@ -431,6 +431,7 @@ ns.ConfigSearchKeywords = {
         dashboard overview home status setup checklist start quick actions diagnostics diagnostic smoke smoke test ptr ready
         recovery reset factory reset restore defaults reload rl mover move mode edit mode current profile combat state
         scaling menu scale ui scale size changelog release notes version support github paypal patreon kofi ko fi discord
+        runtime tooltip tooltips hover mouseover cooldown tooltip buff tooltip show tooltip hide tooltip
         attribution inspired ayije help links
         uebersicht status startseite pruefung diagnose setup zuruecksetzen werkseinstellungen skalierung unterstuetzung
     ]],

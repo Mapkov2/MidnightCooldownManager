@@ -68,6 +68,8 @@ CDM.defaults = {
     defensivesEnabled = true,
     trinketsEnabled = true,
     externalsEnabled = true,
+    tooltipsCooldownsEnabled = true,
+    tooltipsBuffsEnabled = true,
 
     -- Player class resources and auxiliary bars
     resourceClassEnabled = true,

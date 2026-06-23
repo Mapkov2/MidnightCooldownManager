@@ -112,6 +112,27 @@ local function ToggleMoveMode()
     RefreshDashboard()
 end
 
+local function ReadDBBool(key)
+    if CDM.db and CDM.db[key] ~= nil then
+        return CDM.db[key] == true
+    end
+    if CDM.defaults and CDM.defaults[key] ~= nil then
+        return CDM.defaults[key] == true
+    end
+    return false
+end
+
+local function SetTooltipToggle(key, checked)
+    if not CDM.db then return end
+    CDM.db[key] = checked and true or false
+    if CDM.HideRuntimeTooltip then
+        CDM:HideRuntimeTooltip()
+    elseif GameTooltip then
+        GameTooltip:Hide()
+    end
+    RefreshDashboard()
+end
+
 local function GetMenuScale()
     if API.GetConfigMenuScale then
         return API:GetConfigMenuScale()
@@ -548,6 +569,12 @@ function RefreshDashboard()
     if widgets.menuScaleSlider and widgets.menuScaleSlider.UpdateUIValue then
         widgets.menuScaleSlider:UpdateUIValue(menuScalePct)
     end
+    if widgets.cooldownTooltipToggle then
+        widgets.cooldownTooltipToggle:SetChecked(ReadDBBool("tooltipsCooldownsEnabled"))
+    end
+    if widgets.buffTooltipToggle then
+        widgets.buffTooltipToggle:SetChecked(ReadDBBool("tooltipsBuffsEnabled"))
+    end
 
     SetChecklistState(widgets.checkProfile, profile ~= nil and profile ~= "", "done", "open")
     SetChecklistState(widgets.checkData, dataReady and apiOk, "done", "check")
@@ -568,7 +595,7 @@ local function CreateDashboardTab(page)
     dashboardPage = page
     dashboardWidgets = {}
 
-    local content = UI.CreateScrollableTab(page, "MidnightCDM_DashboardScrollFrame", 1040, 820)
+    local content = UI.CreateScrollableTab(page, "MidnightCDM_DashboardScrollFrame", 1040, 930)
     local widgets = dashboardWidgets
 
     local hero = CreatePanel(content, 808, 88)
@@ -667,8 +694,35 @@ local function CreateDashboardTab(page)
     factoryHint:SetText("clears all MCDM settings")
     UI.SetTextFaint(factoryHint)
 
+    local tooltips = CreatePanel(content, 808, 94)
+    tooltips:SetPoint("TOPLEFT", quick, "BOTTOMLEFT", 0, -14)
+
+    local tooltipsTitle = tooltips:CreateFontString(nil, "OVERLAY", "MidnightCDM_Font14")
+    tooltipsTitle:SetPoint("TOPLEFT", tooltips, "TOPLEFT", 16, -12)
+    tooltipsTitle:SetText("Runtime Tooltips")
+    UI.SetTextWhite(tooltipsTitle)
+
+    local tooltipsText = tooltips:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    tooltipsText:SetPoint("TOPLEFT", tooltipsTitle, "BOTTOMLEFT", 0, -8)
+    tooltipsText:SetPoint("RIGHT", tooltips, "RIGHT", -18, 0)
+    tooltipsText:SetJustifyH("LEFT")
+    tooltipsText:SetText("Control hover tooltips for active MCDM cooldown and buff elements.")
+    UI.SetTextSubtle(tooltipsText)
+
+    widgets.cooldownTooltipToggle = UI.CreateModernCheckbox(tooltips, "Cooldown Tooltips", ReadDBBool("tooltipsCooldownsEnabled"), function(checked)
+        SetTooltipToggle("tooltipsCooldownsEnabled", checked)
+    end)
+    widgets.cooldownTooltipToggle:SetPoint("TOPLEFT", tooltips, "TOPLEFT", 16, -58)
+    widgets.cooldownTooltipToggle:SetWidth(260)
+
+    widgets.buffTooltipToggle = UI.CreateModernCheckbox(tooltips, "Buff Tooltips", ReadDBBool("tooltipsBuffsEnabled"), function(checked)
+        SetTooltipToggle("tooltipsBuffsEnabled", checked)
+    end)
+    widgets.buffTooltipToggle:SetPoint("LEFT", widgets.cooldownTooltipToggle, "RIGHT", 42, 0)
+    widgets.buffTooltipToggle:SetWidth(220)
+
     local scaling = CreatePanel(content, 808, 116)
-    scaling:SetPoint("TOPLEFT", quick, "BOTTOMLEFT", 0, -14)
+    scaling:SetPoint("TOPLEFT", tooltips, "BOTTOMLEFT", 0, -14)
 
     local scalingTitle = scaling:CreateFontString(nil, "OVERLAY", "MidnightCDM_Font14")
     scalingTitle:SetPoint("TOPLEFT", scaling, "TOPLEFT", 16, -12)

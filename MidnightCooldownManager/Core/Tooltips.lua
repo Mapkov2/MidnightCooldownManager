@@ -8,6 +8,7 @@ local InCombatLockdown = InCombatLockdown
 local pcall = pcall
 local pendingInstallFrames = setmetatable({}, { __mode = "k" })
 local pendingInstallRegistered = false
+local VIEWERS = CDM.CONST and CDM.CONST.VIEWERS or {}
 
 local function ValidID(id)
     return IsSafeNumber(id) and id > 0
@@ -53,11 +54,37 @@ end
 
 local HideTooltip
 
+local function ReadTooltipToggle(key)
+    if CDM.db and CDM.db[key] ~= nil then
+        return CDM.db[key] == true
+    end
+    if CDM.defaults and CDM.defaults[key] ~= nil then
+        return CDM.defaults[key] == true
+    end
+    return true
+end
+
+local function IsBuffTooltipFrame(frame)
+    local viewerName = frame and frame.cdmViewerName
+    return viewerName == VIEWERS.BUFF or viewerName == VIEWERS.BUFF_BAR
+end
+
+local function IsMCDMTooltipCategoryEnabled(frame)
+    if IsBuffTooltipFrame(frame) then
+        return ReadTooltipToggle("tooltipsBuffsEnabled")
+    end
+    return ReadTooltipToggle("tooltipsCooldownsEnabled")
+end
+
 local function ShowResolvedTooltip(ownerFrame)
     local tooltip = GameTooltip or _G.GameTooltip
     if not tooltip then return end
 
     local dataFrame = (ownerFrame and ownerFrame.cdmTooltipOwner) or ownerFrame
+    if not IsMCDMTooltipCategoryEnabled(dataFrame) then
+        HideTooltip()
+        return
+    end
     if CDM.IsRuntimeTooltipAllowed and not CDM:IsRuntimeTooltipAllowed(dataFrame) then
         HideTooltip()
         return
@@ -189,4 +216,8 @@ function CDM:RefreshRuntimeTooltip(frame)
     if hitbox and hitbox:IsMouseOver() then
         ShowResolvedTooltip(hitbox)
     end
+end
+
+function CDM:HideRuntimeTooltip()
+    HideTooltip()
 end
