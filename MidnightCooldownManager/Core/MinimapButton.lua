@@ -93,7 +93,7 @@ local function OnClick(_, button)
 end
 
 local function AddTooltipLines(tooltip)
-    tooltip:SetText("Midnight Simple Cooldown", 1, 1, 1)
+    tooltip:SetText("MidnightCooldownManager", 1, 1, 1)
     tooltip:AddLine("Left-click: Open MCDM", 0.35, 0.82, 1)
     tooltip:AddLine("Right-click: Toggle Move Mode", 0.35, 0.82, 1)
     tooltip:AddLine("Drag: Move minimap icon", 0.65, 0.72, 0.86)
@@ -224,8 +224,8 @@ function MinimapButton:TryRegisterDBIcon(global, db)
 
     self.dataObject = self.dataObject or LDB:NewDataObject(LDB_NAME, {
         type = "launcher",
-        text = "MCDM",
-        label = "MCDM",
+        text = "MidnightCooldownManager",
+        label = "MidnightCooldownManager",
         icon = ICON_PATH,
         OnClick = OnClick,
         OnTooltipShow = OnTooltipShow,

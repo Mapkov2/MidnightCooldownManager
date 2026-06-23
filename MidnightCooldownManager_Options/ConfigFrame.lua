@@ -557,7 +557,7 @@ local function SelectCategory(id)
         page:Refresh()
     end
     if ConfigFrame and ConfigFrame.title and ns.ConfigTabs and ns.ConfigTabs[id] then
-        ConfigFrame.title:SetText(ns.ConfigTabs[id].label or "Midnight Simple Cooldown")
+        ConfigFrame.title:SetText(ns.ConfigTabs[id].label or "MidnightCooldownManager")
     end
 
     local scrollFrameName = SCROLL_FRAME_NAMES[id]
@@ -1368,7 +1368,7 @@ local function CreateConfigFrame()
     title:SetPoint("TOPRIGHT", ConfigFrame, "TOPRIGHT", -112, -6)
     title:SetJustifyH("CENTER")
     title:SetAlpha(0.50)
-    title:SetText("Midnight Simple Cooldown")
+    title:SetText("MidnightCooldownManager")
     UI.SetTextColor(title, COLORS.accent)
     ConfigFrame.title = title
 

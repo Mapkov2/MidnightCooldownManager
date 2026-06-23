@@ -10,7 +10,7 @@ end
 function MCDM_AddonCompartment_OnEnter(button)
     if not GameTooltip or not button then return end
     GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
-    GameTooltip:SetText("Midnight Simple Cooldown", 1, 1, 1)
+    GameTooltip:SetText("MidnightCooldownManager", 1, 1, 1)
     GameTooltip:AddLine("/mcdm", 0.35, 0.82, 1)
     GameTooltip:AddLine("/mcdm move", 0.35, 0.82, 1)
     GameTooltip:Show()

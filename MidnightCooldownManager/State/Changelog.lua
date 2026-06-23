@@ -14,7 +14,7 @@ local data = {
                 {
                     title = "Release Context",
                     bullets = {
-                        "Renamed the public product to Midnight Simple Cooldown while keeping the internal addon folders and SavedVariables stable.",
+                        "Renamed the public product to MidnightCooldownManager while keeping the internal addon folders and SavedVariables stable.",
                         "Prepared the first 1.0 Beta package for 12.1 testing.",
                         "Focused the addon on cooldown groups, buff icon groups, buff bars, class resources, player power, and optional second HP bar.",
                     },

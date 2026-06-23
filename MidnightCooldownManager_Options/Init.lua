@@ -71,7 +71,7 @@ StaticPopupDialogs["MidnightCooldownManager_CONFIRM_RESET_PROFILE"] = {
 }
 
 StaticPopupDialogs["MidnightCooldownManager_CONFIRM_FACTORY_RESET"] = {
-    text = "Factory reset all Midnight Simple Cooldown settings? This clears profiles, global options, cached data, and reloads the UI.",
+    text = "Factory reset all MidnightCooldownManager settings? This clears profiles, global options, cached data, and reloads the UI.",
     button1 = "Factory Reset",
     button2 = L["Cancel"],
     OnAccept = function()

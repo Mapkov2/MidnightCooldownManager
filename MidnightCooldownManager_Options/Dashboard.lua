@@ -180,7 +180,7 @@ local function BuildChangelogText()
     end
 
     local lines = {}
-    lines[#lines + 1] = "Midnight Simple Cooldown Changelog"
+    lines[#lines + 1] = "MidnightCooldownManager Changelog"
     if data.rangeLabel then
         lines[#lines + 1] = data.rangeLabel
     end
@@ -224,7 +224,7 @@ local function ShowChangelog()
         subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
         subtitle:SetPoint("RIGHT", window, "RIGHT", -18, 0)
         subtitle:SetJustifyH("LEFT")
-        subtitle:SetText("Release notes for the current Midnight Simple Cooldown build.")
+        subtitle:SetText("Release notes for the current MidnightCooldownManager build.")
         UI.SetTextSubtle(subtitle)
 
         local scroll = CreateFrame("ScrollFrame", nil, window)
@@ -575,7 +575,7 @@ local function CreateDashboardTab(page)
     hero:SetPoint("TOPLEFT", content, "TOPLEFT", 0, 0)
 
     local title = CreateTitle(hero, "Dashboard", 16, -14)
-    CreateSubtitle(hero, title, "Review Midnight Simple Cooldown setup, check runtime status, and jump into the main tools.")
+    CreateSubtitle(hero, title, "Review MidnightCooldownManager setup, check runtime status, and jump into the main tools.")
 
     widgets.moveButton = UI.CreateModernButton(hero, "Move Mode: Off", 126, 24, "primary")
     widgets.moveButton:SetPoint("TOPRIGHT", hero, "TOPRIGHT", -330, -24)
@@ -601,7 +601,7 @@ local function CreateDashboardTab(page)
     local overview = CreatePanel(content, 526, 282)
     overview:SetPoint("TOPLEFT", widgets.profile, "BOTTOMLEFT", 0, -14)
 
-    local overviewTitle = CreateTitle(overview, "MSC Overview", 16, -13)
+    local overviewTitle = CreateTitle(overview, "MCDM Overview", 16, -13)
     CreateSubtitle(overview, overviewTitle, "Current profile, viewer data, custom groups, and resource runtime.")
 
     widgets.overviewProfile = CreateOverviewRow(overview, -70, "Profile", "")
@@ -747,7 +747,7 @@ local function CreateDashboardTab(page)
 
     local supportTitle = support:CreateFontString(nil, "OVERLAY", "MidnightCDM_Font14")
     supportTitle:SetPoint("TOPLEFT", support, "TOPLEFT", 16, -12)
-    supportTitle:SetText("Support Midnight Simple Cooldown")
+    supportTitle:SetText("Support MidnightCooldownManager")
     UI.SetTextWhite(supportTitle)
 
     local supportText = support:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
