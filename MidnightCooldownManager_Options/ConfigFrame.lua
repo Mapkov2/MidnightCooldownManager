@@ -305,12 +305,17 @@ local function GetAddonVersionText()
 
     version = tostring(version)
     if version:lower():find("beta", 1, true) then
+        local betaSuffix = version:match("[Bb][Ee][Tt][Aa]%s*([%w._-]*)")
+        local betaLabel = "BETA"
+        if betaSuffix and betaSuffix ~= "" then
+            betaLabel = betaLabel .. " " .. betaSuffix
+        end
         local baseVersion = version:gsub("%s*[Bb][Ee][Tt][Aa].*$", "")
         baseVersion = baseVersion:gsub("%s+$", "")
         if baseVersion == "" then
             baseVersion = version
         end
-        return "v" .. baseVersion .. "  |cffffd24aBETA|r"
+        return "v" .. baseVersion .. "  |cffffd24a" .. betaLabel .. "|r"
     end
 
     return "v" .. version

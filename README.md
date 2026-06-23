@@ -6,7 +6,7 @@ Midnight Simple Cooldown is a Retail World of Warcraft addon for cooldown icons,
 
 ```powershell
 pwsh ./tools/validate.ps1
-pwsh ./tools/package-release.ps1 -Version "1.0.1 Beta"
+pwsh ./tools/package-release.ps1 -Version "1.0 Beta 1"
 ```
 
 The release ZIP is written to `dist/` and contains both addon folders:

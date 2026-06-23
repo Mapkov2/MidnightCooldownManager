@@ -1,9 +1,13 @@
 # Changelog
 
-## 1.0.1 Beta - 2026-06-23
+## 1.0 Beta 1 - 2026-06-24
 
-- Made the in-menu version label more readable and marked beta builds explicitly.
-- Kept the release in beta while continuing 12.1 PTR and retail validation.
+- First public beta package for MidnightCooldownManager.
+- Built around Blizzard's current Cooldown Manager data path for 12.0.7 and 12.1, with cached cooldown records, compatibility guards, and smoke diagnostics.
+- Added custom cooldown groups, buff icon groups, buff bars, per-spell overrides, dummy previews, import/export, profile management, and spec-aware setup.
+- Added class resources, player power bar, optional second HP bar, textures, color tabs, outlines, load conditions, preview zoom/pan/drag controls, and Ayije profile import coverage for resource settings.
+- Added the Midnight superellipse options UI with dashboard, staged menu scaling, minimap/addon-compartment access, move mode, runtime tooltip toggles, MSUF-style controls, and clipping fixes across the main editor surfaces.
+- Includes Ayije CDM-inspired defaults and migration helpers while keeping MCDM standalone and independently maintained.
 
 ## 1.0 Beta - 2026-06-23
 
