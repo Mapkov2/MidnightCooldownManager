@@ -155,6 +155,11 @@ local function CreateBuffGroupsTab(page)
         end)
     end
 
+    local EnsureUngroupedBuffPins
+    local RemoveUngroupedBuffPin
+    local AddUngroupedBuffPin
+    local AddUngroupedPinsToIconList
+
     local function GetUngroupedBuffSpells()
         local icons = {}
         local seen = {}
@@ -190,11 +195,66 @@ local function CreateBuffGroupsTab(page)
                 icons[#icons + 1] = { spellID = displayID, layoutIndex = safeLayoutIndex }
             end
         end)
+        AddUngroupedPinsToIconList(currentSpecID, icons, seen, groupedSet)
         table.sort(icons, function(a, b)
             if a.layoutIndex ~= b.layoutIndex then return a.layoutIndex < b.layoutIndex end
             return a.spellID < b.spellID
         end)
         return icons
+    end
+
+    EnsureUngroupedBuffPins = function(specID)
+        if not specID or not CDM.db then return nil end
+        if not CDM.db.ungroupedBuffPins then
+            CDM.db.ungroupedBuffPins = {}
+        end
+        local pins = CDM.db.ungroupedBuffPins[specID]
+        if type(pins) ~= "table" then
+            pins = {}
+            CDM.db.ungroupedBuffPins[specID] = pins
+        end
+        return pins
+    end
+
+    RemoveUngroupedBuffPin = function(specID, spellID)
+        if not specID or not Shared.IsUsableSpellID(spellID) then return end
+        local pinsBySpec = CDM.db and CDM.db.ungroupedBuffPins
+        local pins = pinsBySpec and pinsBySpec[specID]
+        if type(pins) ~= "table" then return end
+        for i = #pins, 1, -1 do
+            if pins[i] == spellID then
+                table.remove(pins, i)
+            end
+        end
+    end
+
+    AddUngroupedBuffPin = function(specID, spellID)
+        if not specID or not Shared.IsUsableSpellID(spellID) then return end
+        if CDM.db and CDM.db.customBuffRegistry and CDM.db.customBuffRegistry[spellID] then
+            return
+        end
+        local pins = EnsureUngroupedBuffPins(specID)
+        if not pins then return end
+        RemoveUngroupedBuffPin(specID, spellID)
+        pins[#pins + 1] = spellID
+    end
+
+    AddUngroupedPinsToIconList = function(specID, icons, seen, groupedSet)
+        local pinsBySpec = CDM.db and CDM.db.ungroupedBuffPins
+        local pins = pinsBySpec and pinsBySpec[specID]
+        if type(pins) ~= "table" then return end
+
+        for i = 1, #pins do
+            local pinnedSpellID = pins[i]
+            if Shared.IsUsableSpellID(pinnedSpellID)
+                and not (CDM.db and CDM.db.customBuffRegistry and CDM.db.customBuffRegistry[pinnedSpellID])
+                and not Shared.HasEquivalentSpellID(groupedSet, pinnedSpellID)
+                and not seen[pinnedSpellID]
+            then
+                seen[pinnedSpellID] = true
+                icons[#icons + 1] = { spellID = pinnedSpellID, layoutIndex = 100000 + i, pinned = true }
+            end
+        end
     end
 
     local QueueLeftPanelRefresh = Shared.CreateQueueLeftPanelRefresh(page, function() return RefreshAll end)
@@ -227,6 +287,7 @@ local function CreateBuffGroupsTab(page)
                 end
 
                 if targetGroupIndex then
+                    RemoveUngroupedBuffPin(currentSpecID, spellID)
                     local tgtGroup = groups[targetGroupIndex]
                     if tgtGroup then
                         if not tgtGroup.spells then tgtGroup.spells = {} end
@@ -237,10 +298,13 @@ local function CreateBuffGroupsTab(page)
                         end
                         spellID = storedSpellID
                     end
-                elseif srcOvData then
-                    local specOv = EnsureUngroupedOverrides()
-                    if specOv then
-                        StoreMergedOverrideEntry(specOv, spellID, srcOvData)
+                else
+                    AddUngroupedBuffPin(currentSpecID, spellID)
+                    if srcOvData then
+                        local specOv = EnsureUngroupedOverrides()
+                        if specOv then
+                            StoreMergedOverrideEntry(specOv, spellID, srcOvData)
+                        end
                     end
                 end
 
@@ -505,6 +569,7 @@ local function CreateBuffGroupsTab(page)
         end
 
         local seen = {}
+        local seenSpell = {}
         local result = {}
         for _, entry in ipairs(rawCache) do
             local spellID = entry.spellID
@@ -515,8 +580,24 @@ local function CreateBuffGroupsTab(page)
                 and not seen[dedupKey]
             then
                 seen[dedupKey] = true
+                seenSpell[spellID] = true
                 local name = C_Spell.GetSpellName(spellID) or ("Spell " .. spellID)
                 result[#result + 1] = { spellID = spellID, name = name }
+            end
+        end
+        local pinsBySpec = CDM.db and CDM.db.ungroupedBuffPins
+        local pins = pinsBySpec and pinsBySpec[specID]
+        if type(pins) == "table" then
+            for _, pinnedSpellID in ipairs(pins) do
+                if Shared.IsUsableSpellID(pinnedSpellID)
+                    and not (CDM.db and CDM.db.customBuffRegistry and CDM.db.customBuffRegistry[pinnedSpellID])
+                    and not Shared.HasEquivalentSpellID(assigned, pinnedSpellID)
+                    and not seenSpell[pinnedSpellID]
+                then
+                    seenSpell[pinnedSpellID] = true
+                    local name = C_Spell.GetSpellName(pinnedSpellID) or ("Spell " .. pinnedSpellID)
+                    result[#result + 1] = { spellID = pinnedSpellID, name = name }
+                end
             end
         end
         table.sort(result, function(a, b) return a.name < b.name end)
@@ -1242,6 +1323,7 @@ local function CreateBuffGroupsTab(page)
                 if not currentGroups[groupIndex].spells then
                     currentGroups[groupIndex].spells = {}
                 end
+                RemoveUngroupedBuffPin(currentSpecID, sid)
                 Shared.AddSpellToGroupList(currentGroups[groupIndex].spells, sid)
                 local specOv = EnsureUngroupedOverrides()
                 if specOv then
@@ -1370,6 +1452,7 @@ local function CreateBuffGroupsTab(page)
                             if not currentGroups[targetGroupIndex].spells then
                                 currentGroups[targetGroupIndex].spells = {}
                             end
+                            RemoveUngroupedBuffPin(currentSpecID, sid)
                             Shared.AddSpellToGroupList(currentGroups[targetGroupIndex].spells, sid)
                         end
                     end
@@ -1483,6 +1566,7 @@ local function CreateBuffGroupsTab(page)
                     if not currentGroups[targetGroupIndex].spells then
                         currentGroups[targetGroupIndex].spells = {}
                     end
+                    RemoveUngroupedBuffPin(currentSpecID, sid)
                     Shared.AddSpellToGroupList(currentGroups[targetGroupIndex].spells, sid)
                 end
             end
@@ -1577,7 +1661,8 @@ local function CreateBuffGroupsTab(page)
                 local srcGroup = groups[sourceGroup]
                 local spells = srcGroup.spells
                 if spells then
-                    Shared.RemoveSpellFromGroupList(spells, spellID)
+                    local removedSpellID = Shared.RemoveSpellFromGroupList(spells, spellID) or spellID
+                    AddUngroupedBuffPin(currentSpecID, removedSpellID)
                 end
                 local srcOvData
                 if srcGroup.spellOverrides then
@@ -2024,13 +2109,18 @@ local function CreateBuffGroupsTab(page)
                         local specGroups = EnsureBuffGroups()
                         if specGroups then
                             local gd = specGroups[groupIndex]
-                            if gd and gd.spells and gd.spellOverrides then
-                                local specOv = EnsureUngroupedOverrides()
-                                if specOv then
-                                    for _, sid in ipairs(gd.spells) do
-                                        local ovData = ExtractMergedOverrideEntry(gd.spellOverrides, sid)
-                                        if ovData then
-                                            StoreMergedOverrideEntry(specOv, sid, ovData)
+                            if gd and gd.spells then
+                                for _, sid in ipairs(gd.spells) do
+                                    AddUngroupedBuffPin(currentSpecID, sid)
+                                end
+                                if gd.spellOverrides then
+                                    local specOv = EnsureUngroupedOverrides()
+                                    if specOv then
+                                        for _, sid in ipairs(gd.spells) do
+                                            local ovData = ExtractMergedOverrideEntry(gd.spellOverrides, sid)
+                                            if ovData then
+                                                StoreMergedOverrideEntry(specOv, sid, ovData)
+                                            end
                                         end
                                     end
                                 end

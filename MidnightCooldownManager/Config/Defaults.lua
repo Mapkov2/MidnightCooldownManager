@@ -250,6 +250,7 @@ CDM.defaults = {
     customBuffRegistry = {},
     ungroupedCustomBuffOrder = {},
     buffGroups = {},
+    ungroupedBuffPins = {},
     ungroupedBuffOverrides = {},
     barGroups = {},
     ungroupedBarOverrides = {},

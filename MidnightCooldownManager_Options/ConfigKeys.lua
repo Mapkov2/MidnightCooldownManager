@@ -399,6 +399,7 @@ ns.ConfigKeys = {
             label = "Buff Groups",
             keys = {
                 "buffGroups",
+                "ungroupedBuffPins",
                 "ungroupedBuffOverrides",
                 "spellRegistry",
                 "customBuffRegistry",
