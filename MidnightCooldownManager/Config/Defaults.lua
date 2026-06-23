@@ -82,7 +82,7 @@ CDM.defaults = {
     resourceAnchorPoint = "BOTTOM",
     resourceRelativePoint = "TOP",
     resourceOffsetX = 0,
-    resourceOffsetY = 2,
+    resourceOffsetY = 22,
     resourceTexture = "Solid",
     resourceBgTexture = "",
     resourceBackgroundColor = { r = 0, g = 0, b = 0, a = 0.35 },

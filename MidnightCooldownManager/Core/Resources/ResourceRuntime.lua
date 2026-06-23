@@ -1143,7 +1143,7 @@ local function LayoutResourceAnchorFrame()
         AnchorTarget(Read("resourceAnchorTarget")),
         Read("resourceRelativePoint") or "TOP",
         Read("resourceOffsetX") or 0,
-        Read("resourceOffsetY") or 2
+        Read("resourceOffsetY") or 22
     )
 
     if state.bg then
