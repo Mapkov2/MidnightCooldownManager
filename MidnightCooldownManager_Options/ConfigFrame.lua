@@ -316,8 +316,7 @@ local function MinimizeConfigWindow(frame)
     if not (frame and minimizedBar) then return false end
     frame._mcdmMinimized = true
     if minimizedBar.title then
-        local title = frame.title and frame.title.GetText and frame.title:GetText()
-        minimizedBar.title:SetText((title and title ~= "" and title) or "MCDM Menu")
+        minimizedBar.title:SetText("MCDM Menu")
     end
     minimizedBar:Show()
     frame:Hide()
