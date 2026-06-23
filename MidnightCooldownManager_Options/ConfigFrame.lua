@@ -209,11 +209,61 @@ local function SaveConfigMenuScale(scale)
     state.menuScale = ClampMenuScale(scale)
 end
 
+local pendingMenuScaleFrame = nil
+local pendingMenuScale = nil
+local menuScaleCommitFrame = nil
+
+local function RefreshScaledWindowBounds(frame)
+    if not frame then return end
+    ApplyWindowResizeBounds(frame)
+    if frame.SetClampedToScreen then
+        frame:SetClampedToScreen(false)
+        frame:SetClampedToScreen(true)
+    end
+    if frame.Raise and frame.IsShown and frame:IsShown() then
+        frame:Raise()
+    end
+    if UI and UI.RefreshWindowControls then
+        UI.RefreshWindowControls(frame)
+    end
+end
+
+local function QueueMenuScaleCommit(frame, scale)
+    if not (frame and frame.SetScale) then return end
+    pendingMenuScaleFrame = frame
+    pendingMenuScale = scale
+    if not menuScaleCommitFrame then
+        menuScaleCommitFrame = CreateFrame("Frame")
+        menuScaleCommitFrame:SetScript("OnUpdate", function(self)
+            self:Hide()
+            local target = pendingMenuScaleFrame
+            local queuedScale = pendingMenuScale
+            pendingMenuScaleFrame = nil
+            pendingMenuScale = nil
+            if target and queuedScale and target.SetScale then
+                target:SetScale(queuedScale)
+                RefreshScaledWindowBounds(target)
+            end
+            if minimizedBar and queuedScale and minimizedBar.SetScale then
+                minimizedBar:SetScale(queuedScale)
+            end
+        end)
+    end
+    menuScaleCommitFrame:Show()
+end
+
 local function ApplyConfigMenuScale(frame, scale, skipSave)
     scale = ClampMenuScale(scale)
     frame = frame or ConfigFrame or ns.ConfigFrame
+    local layout = (frame and frame.IsShown and frame:IsShown()) and CaptureWindowLayout(frame) or nil
     if frame and frame.SetScale then
         frame:SetScale(scale)
+        if layout then
+            ApplyWindowLayout(frame, layout, true)
+        else
+            RefreshScaledWindowBounds(frame)
+        end
+        QueueMenuScaleCommit(frame, scale)
     end
     if minimizedBar and minimizedBar.SetScale then
         minimizedBar:SetScale(scale)
