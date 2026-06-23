@@ -410,9 +410,32 @@ local function CreateQuickAction(parent, text, tabId, x, y, role, onClick)
     return button
 end
 
-local function CreateSupportButton(parent, text, url, x, y, width)
+local SUPPORT_ICON_PATHS = {
+    Patreon = "Interface\\AddOns\\MidnightCooldownManager\\Media\\Support\\Patreon.png",
+    PayPal = "Interface\\AddOns\\MidnightCooldownManager\\Media\\Support\\PayPal.png",
+    ["Ko-fi"] = "Interface\\AddOns\\MidnightCooldownManager\\Media\\Support\\Ko-Fi.png",
+    GitHub = "Interface\\AddOns\\MidnightCooldownManager\\Media\\Support\\GitHub.png",
+}
+
+local function CreateSupportButton(parent, text, url, x, y, width, iconPath)
     local button = UI.CreateModernButton(parent, text, width or 88, 24)
     button:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    if iconPath then
+        local icon = button:CreateTexture(nil, "ARTWORK")
+        icon:SetSize(16, 16)
+        icon:SetPoint("LEFT", button, "LEFT", 10, 0)
+        icon:SetTexture(iconPath)
+        icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        button.Icon = icon
+
+        local label = button._mcdmLabel or (button.GetFontString and button:GetFontString())
+        if label and label.ClearAllPoints then
+            label:ClearAllPoints()
+            label:SetPoint("LEFT", icon, "RIGHT", 6, 0)
+            label:SetPoint("RIGHT", button, "RIGHT", -9, 0)
+            label:SetJustifyH("LEFT")
+        end
+    end
     button:SetScript("OnClick", function()
         CopySupportLink(text, url)
     end)
@@ -742,11 +765,11 @@ local function CreateDashboardTab(page)
     about:SetText("v" .. version .. "  -  by Mapko  -  inspired by Ayije CDM")
     UI.SetTextFaint(about)
 
-    CreateSupportButton(support, "Patreon", "https://www.patreon.com/cw/MidnightSimpleUnitframes", 16, -82, 88)
-    CreateSupportButton(support, "PayPal", "https://www.paypal.com/ncp/payment/H3N2P87S53KBQ", 112, -82, 82)
-    CreateSupportButton(support, "Ko-fi", "https://ko-fi.com/midnightsimpleunitframes#linkModal", 202, -82, 76)
-    CreateSupportButton(support, "GitHub", "https://github.com/Mapkov2/MidnightCooldownManager", 286, -82, 82)
-    CreateSupportButton(support, "Discord", "https://discord.gg/2Gf9b2Wprz", 376, -82, 86)
+    CreateSupportButton(support, "Patreon", "https://www.patreon.com/cw/MidnightSimpleUnitframes", 16, -82, 104, SUPPORT_ICON_PATHS.Patreon)
+    CreateSupportButton(support, "PayPal", "https://www.paypal.com/ncp/payment/H3N2P87S53KBQ", 128, -82, 96, SUPPORT_ICON_PATHS.PayPal)
+    CreateSupportButton(support, "Ko-fi", "https://ko-fi.com/midnightsimpleunitframes#linkModal", 232, -82, 88, SUPPORT_ICON_PATHS["Ko-fi"])
+    CreateSupportButton(support, "GitHub", "https://github.com/Mapkov2/MidnightCooldownManager", 328, -82, 96, SUPPORT_ICON_PATHS.GitHub)
+    CreateSupportButton(support, "Discord", "https://discord.gg/2Gf9b2Wprz", 432, -82, 86)
 
     page.Refresh = RefreshDashboard
     page:SetScript("OnShow", RefreshDashboard)
