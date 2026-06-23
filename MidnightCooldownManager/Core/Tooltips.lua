@@ -85,10 +85,6 @@ local function ShowResolvedTooltip(ownerFrame)
         HideTooltip()
         return
     end
-    if CDM.IsRuntimeTooltipAllowed and not CDM:IsRuntimeTooltipAllowed(dataFrame) then
-        HideTooltip()
-        return
-    end
 
     local kind, id = ResolveTooltipIDs(dataFrame)
     if not kind then return end
@@ -115,7 +111,7 @@ local function ShowResolvedTooltip(ownerFrame)
     end
 end
 
-function HideTooltip()
+HideTooltip = function()
     local tooltip = GameTooltip or _G.GameTooltip
     if tooltip then
         tooltip:Hide()
