@@ -667,7 +667,7 @@ local function CreatePreview(parent)
     end
 
     local DRAG_DEFS = {
-        resource = { label = "Class Resource", xKey = "resourceOffsetX", yKey = "resourceOffsetY", fallbackX = 0, fallbackY = 6, minX = -800, maxX = 800, minY = -800, maxY = 800 },
+        resource = { label = "Class Resource", xKey = "resourceOffsetX", yKey = "resourceOffsetY", fallbackX = 0, fallbackY = 2, minX = -800, maxX = 800, minY = -800, maxY = 800 },
         power = { label = "Player Power", xKey = "resourcePowerBarOffsetX", yKey = "resourcePowerBarOffsetY", fallbackX = 0, fallbackY = -4, minX = -800, maxX = 800, minY = -800, maxY = 800 },
         hp = { label = "Second HP", xKey = "resourceHPBarOffsetX", yKey = "resourceHPBarOffsetY", fallbackX = 0, fallbackY = -18, minX = -800, maxX = 800, minY = -800, maxY = 800 },
     }
@@ -1564,7 +1564,7 @@ local function CreateResourcesTab(page)
     xSlider:SetPoint("TOPLEFT", 0, y)
     y = y - 45
 
-    local ySlider = UI.CreateModernSlider(anchorBody, "Y Offset", -800, 800, CDM.db.resourceOffsetY or 6, function(v)
+    local ySlider = UI.CreateModernSlider(anchorBody, "Y Offset", -800, 800, CDM.db.resourceOffsetY or 2, function(v)
         CDM.db.resourceOffsetY = UI.RoundToInt(v)
         SaveAndRefresh()
     end)
