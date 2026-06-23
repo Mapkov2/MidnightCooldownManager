@@ -8,6 +8,7 @@ local UI = ns.ConfigUI
 
 local dashboardPage = nil
 local dashboardWidgets = nil
+local RefreshDashboard
 
 local function CountEntries(tbl)
     if type(tbl) ~= "table" then return 0 end
@@ -102,6 +103,13 @@ local function OpenEditModeOverlay()
         ns._DashboardEditModeOverlay = overlay
     end
     overlay:Show()
+end
+
+local function ToggleMoveMode()
+    if CDM.ToggleMoveMode then
+        CDM:ToggleMoveMode()
+    end
+    RefreshDashboard()
 end
 
 local function RunSmokeDiagnostic()
@@ -386,7 +394,7 @@ local function SetChecklistState(row, ok, doneText, startText)
     end
 end
 
-local function RefreshDashboard()
+function RefreshDashboard()
     if not dashboardWidgets then return end
 
     local widgets = dashboardWidgets
@@ -432,6 +440,16 @@ local function RefreshDashboard()
             widgets.editButton:SetActive(CDM.isEditModeActive)
         end
     end
+    if widgets.moveButton then
+        local moveActive = CDM.IsMoveModeActive and CDM:IsMoveModeActive()
+        widgets.moveButton:SetText("Move Mode: " .. (moveActive and "On" or "Off"))
+        if widgets.moveButton.SetActive then
+            widgets.moveButton:SetActive(moveActive and true or false)
+        end
+        if widgets.moveButton.SetEnabled then
+            widgets.moveButton:SetEnabled(not inCombat)
+        end
+    end
 
     SetChecklistState(widgets.checkProfile, profile ~= nil and profile ~= "", "done", "open")
     SetChecklistState(widgets.checkData, dataReady and apiOk, "done", "check")
@@ -461,8 +479,12 @@ local function CreateDashboardTab(page)
     local title = CreateTitle(hero, "Dashboard", 16, -14)
     CreateSubtitle(hero, title, "Review Midnight Simple Cooldown setup, check runtime status, and jump into the main tools.")
 
+    widgets.moveButton = UI.CreateModernButton(hero, "Move Mode: Off", 126, 24, "primary")
+    widgets.moveButton:SetPoint("TOPRIGHT", hero, "TOPRIGHT", -330, -24)
+    widgets.moveButton:SetScript("OnClick", ToggleMoveMode)
+
     local blizzButton = UI.CreateModernButton(hero, "Blizzard Settings", 148, 24)
-    blizzButton:SetPoint("TOPRIGHT", hero, "TOPRIGHT", -166, -24)
+    blizzButton:SetPoint("LEFT", widgets.moveButton, "RIGHT", 10, 0)
     blizzButton:SetScript("OnClick", OpenNativeSettings)
 
     widgets.editButton = UI.CreateModernButton(hero, "Edit Mode: Off", 140, 24, "primary")

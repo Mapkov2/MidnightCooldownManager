@@ -17,6 +17,7 @@ Libs\LibCustomGlow-1.0\LibCustomGlow-1.0.lua
 
 Init.lua
 Core\AddonCompartment.lua
+Core\MinimapButton.lua
 Locales\enUS.lua
 Locales\zhCN.lua
 Locales\ptBR.lua
@@ -52,6 +53,7 @@ Core\Keybinds.lua
 Core\Fading.lua
 Core\Resources\ResourceRuntime.lua
 Core\CooldownDiagnostics.lua
+Core\MoveMode.lua
 
 Config\Defaults.lua
 Config\Core.lua

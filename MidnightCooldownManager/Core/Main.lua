@@ -519,6 +519,12 @@ function CDM:OnEnable()
             end
             return
         end
+        if command == "move" or command == "mover" or command == "movemode" then
+            if CDM.ToggleMoveMode then
+                CDM:ToggleMoveMode()
+            end
+            return
+        end
         CDM:RequestConfigOpen("slash", nil)
     end
 
@@ -541,6 +547,12 @@ function CDM:OnEnable()
     self:InitializeSpecChangeSystem()
     RefreshStyleCache()
     InitializeModules()
+    if self.InitializeMoveMode then
+        self:InitializeMoveMode()
+    end
+    if self.InitializeMinimapButton then
+        self:InitializeMinimapButton()
+    end
     RegisterRefreshCallbacks()
     RegisterLSMFontRefreshCallback()
     RegisterCooldownViewerSettingsVisualRefresh()
